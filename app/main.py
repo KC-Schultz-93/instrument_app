@@ -1,30 +1,46 @@
-
+# instrument_app/app/main.py
 import sys
+import argparse
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
+from instrument_app.theme import style
 from instrument_app.services.serial_manager import SerialManager
 from instrument_app.services.data_recorder import DataRecorder
 from instrument_app.pages.pressure_page import PressureInterlockPage
 from instrument_app.pages.cdms_page import CDMSPage
-from instrument_app.theme import style
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, data_dir="data"):
         super().__init__()
         self.setWindowTitle("Instrument Control")
         self.resize(1280, 800)
-        tabs=QTabWidget()
+
+        # Tabs
+        tabs = QTabWidget()
         self.setCentralWidget(tabs)
 
-        # shared services
+        # Shared services
         self.serial = SerialManager()
-        self.rec    = DataRecorder(root="data")
+        self.rec    = DataRecorder(root=data_dir)
 
-        # pages
+        # Pages
         self.pressure = PressureInterlockPage(self.serial, self.rec)
         self.cdms     = CDMSPage()
 
         tabs.addTab(self.pressure, "Pressures / Interlocks")
         tabs.addTab(self.cdms, "CDMS")
+
+        # (Optional) local stylesheet for tabs/background
+        tabs.setStyleSheet(f"""
+            QTabWidget::pane {{ background: {style.BG}; border: 0px; }}
+            QWidget {{ background: {style.BG}; color: {style.TXT}; }}
+            QTabBar::tab {{
+                background: {style.BTN_BG}; color: {style.TXT};
+                border: 1px solid {style.BTN_BORDER};
+                padding: 6px 10px; margin-right: 6px;
+                border-top-left-radius: 8px; border-top-right-radius: 8px;
+            }}
+            QTabBar::tab:selected {{ background: {style.BTN_BG_DOWN}; }}
+        """)
 
     def closeEvent(self, ev):
         try:
@@ -32,33 +48,31 @@ class MainWindow(QMainWindow):
         finally:
             super().closeEvent(ev)
 
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
+def build_arg_parser():
+    p = argparse.ArgumentParser(prog="instrument_app",
+                                description="Instrument control GUI")
+    p.add_argument("--data-dir", default="data",
+                   help="where CSV output is written (default: %(default)s)")
+    # Add more flags later, e.g. --port COM4, --baud 115200, --style fusion
+    return p
 
-    # Global look: dark background everywhere + tab pane
+def main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint. Returns process exit code."""
+    args = build_arg_parser().parse_args(argv)
+
+    # Qt app
+    app = QApplication(sys.argv)  # keep sys.argv so Qt picks up DPI flags etc.
+
+    # (Optional) global stylesheet; you can also leave this in the page
     app.setStyleSheet(f"""
-        QMainWindow {{
-            background: {style.BG};
-            color: {style.TXT};
-        }}
-        QTabWidget::pane {{
-            background: {style.BG};
-            border: 0px;
-        }}
-        QTabBar::tab {{
-            background: {style.BTN_BG};
-            color: {style.TXT};
-            border: 1px solid {style.BTN_BORDER};
-            padding: 6px 10px;
-            margin-right: 6px;
-            border-top-left-radius: 8px;
-            border-top-right-radius: 8px;
-        }}
-        QTabBar::tab:selected {{
-            background: {style.BTN_BG_DOWN};
-        }}
+        QMainWindow {{ background: {style.BG}; color: {style.TXT}; }}
+        QToolTip {{ color: {style.TXT}; background: {style.CARD_BG}; }}
     """)
 
-    win = MainWindow()
+    win = MainWindow(data_dir=args.data_dir)
     win.show()
-    sys.exit(app.exec_())
+    return app.exec_()
+
+# Allow direct python file execution too (useful for tests)
+if __name__ == "__main__":
+    sys.exit(main())

@@ -9,12 +9,25 @@ from instrument_app.config.settings import BAUD_RATE, READ_PERIOD_MS
 class SerialWorker(QObject):
     reading = pyqtSignal(object)  # Reading
     status  = pyqtSignal(str)
+    
     def __init__(self, port, baud):
         super().__init__()
         self._port, self._baud = port, baud
         self._ser = None
         self._timer = QTimer()
         self._timer.timeout.connect(self._poll_once)
+    
+    def write_line(self, line: str):
+        try:
+            if not self._ser:
+                self.status.emit("TX ignored: not connected")
+                return
+            msg = (line.strip().upper() + "\n").encode("ascii", errors="ignore")
+            self._ser.write(msg)
+            self._ser.flush()
+            self.status.emit(f">> {line.strip().upper()}")
+        except Exception as e:
+            self.status.emit(f"TX error: {e}")
 
     def start(self):
         try:
@@ -71,6 +84,12 @@ class SerialManager(QObject):
         self._thread.start()
         self.connectedChanged.emit(True, port)
 
+    def send_command(self, cmd: str):
+        if self._worker and self._thread and self._thread.isRunning():
+            self._worker.write_line(cmd)
+        else:
+            self.status.emit("TX ignored: not connected")
+            
     def disconnect(self):
         if self._worker:
             self._worker.stop()
