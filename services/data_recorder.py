@@ -1,4 +1,23 @@
 
+"""
+Module: instrument_app.services.data_recorder
+Purpose: Single-writer CSV logger for readings with timestamped filename.
+
+How it fits:
+- Depends on: pathlib/csv, instrument_app.util.parsing.Reading
+- Used by:    PressureInterlockPage (append on each reading)
+
+Public API:
+- class DataRecorder(root="data"): append(Reading)
+
+Notes:
+- Future: daily→weekly→monthly rotation without changing callers.
+
+Changelog:
+- 2025-08-23 · 0.1.0 · KC · Initial CSV writer with header + timestamped file.
+"""
+
+
 import csv
 from datetime import datetime
 from pathlib import Path

@@ -1,4 +1,24 @@
-# instrument_app/app/main.py
+
+"""
+Module: instrument_app.app.main
+Purpose: Application shell that builds the QMainWindow and tabs, wires shared services,
+         and starts the Qt event loop via main().
+
+How it fits:
+- Depends on: instrument_app.services.serial_manager, data_recorder
+              instrument_app.pages.pressure_page, cdms_page
+              instrument_app.theme.style
+- Used by:    instrument_app.__main__ (python -m instrument_app), direct script runs
+
+Public API:
+- class MainWindow(QMainWindow)
+- def main(argv: list[str]|None = None) -> int
+
+Changelog:
+- 2025-08-23 · 0.1.0 · KC · Modular app shell with Pressures/Interlocks + CDMS tab.
+"""
+
+# ment_app/app/main.py
 import sys
 import argparse
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget

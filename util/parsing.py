@@ -1,3 +1,20 @@
+
+"""
+Module: instrument_app.util.parsing
+Purpose: Parse Arduino CSV-ish lines into a typed Reading dataclass.
+
+How it fits:
+- Depends on: dataclasses
+- Used by:    SerialWorker (line→Reading), DataRecorder (type hints)
+
+Public API:
+- @dataclass Reading(t_s, uhv_torr, fore_torr, tg220, tg60)
+- def parse_arduino_line(line: str) -> Optional[Reading]
+
+Changelog:
+- 2025-08-23 · 0.1.0 · KC · Robust parser; tolerant to units and missing fields.
+"""
+
 from dataclasses import dataclass
 from typing import Optional
 

@@ -1,4 +1,25 @@
 
+"""
+Module: instrument_app.services.serial_manager
+Purpose: Threaded serial I/O for the Arduino. Periodically reads lines, parses them,
+         emits structured readings, and provides a thread-safe send_command().
+
+How it fits:
+- Depends on: pyserial, PyQt (QThread/QTimer), instrument_app.util.parsing
+- Used by:    PressureInterlockPage (subscribe to signals), MainWindow (lifecycle)
+
+Public API:
+- class SerialManager(QObject): connect(port), disconnect(), send_command(str)
+- Signals: reading(Reading), connectedChanged(bool, str), status(str)
+
+Threading model:
+- Worker (SerialWorker) lives in a QThread; GUI never blocks on I/O.
+
+Changelog:
+- 2025-08-23 · 0.1.0 · KC · Added write_line/send_command and signal wiring.
+"""
+
+
 from PyQt5.QtCore import QObject, pyqtSignal, QThread, QTimer
 from serial.tools import list_ports
 import serial
