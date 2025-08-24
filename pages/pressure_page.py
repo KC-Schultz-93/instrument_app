@@ -1,3 +1,28 @@
+
+"""
+Module: instrument_app.pages.pressure_page
+Purpose: UI page for pressures/interlocks: port controls, status pills, pump controls,
+         and a time-series plot with log-Y and dynamic min↔hr X-axis.
+
+How it fits:
+- Depends on: instrument_app.services.serial_manager.SerialManager
+              instrument_app.services.data_recorder.DataRecorder
+              instrument_app.widgets.time_pressure_plot.TimePressurePlot
+              instrument_app.theme.style
+- Used by:    MainWindow (as a tab)
+
+Public API:
+- class PressureInterlockPage(QWidget)
+
+Signals / Slots:
+- Listens: SerialManager.reading, connectedChanged, status
+- Emits:   (none) — delegates TX via SerialManager.send_command()
+
+Changelog:
+- 2025-08-23 · 0.1.0 · KC · Refactored UI from legacy INT_Readout into modular page.
+"""
+
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QComboBox, QFrame, QSizePolicy
