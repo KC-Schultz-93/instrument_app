@@ -20,6 +20,17 @@ Notes:
 
 """
 
+# instrument_app/theme/style.py
+from .manager import theme_mgr
+
+class _StyleProxy:
+    def __getattr__(self, name: str):
+        # forward any attribute lookup (e.g., TXT, BG, GOOD) to the current theme
+        return getattr(theme_mgr.current, name)
+
+style = _StyleProxy()
+
+
 
 # ---------------- Theme (submarine dark) ----------------
 BG           = "#0b2a38"
