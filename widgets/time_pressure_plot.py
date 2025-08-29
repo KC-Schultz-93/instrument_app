@@ -26,7 +26,7 @@ from PyQt5.QtCore import Qt, QEvent
 import pyqtgraph as pg
 import math
 import bisect
-from instrument_app.theme.style import BG, PLOT_FG
+from instrument_app.theme import style
 from instrument_app.util.parsing import Reading
 
 class DynamicMinuteHourAxis(pg.AxisItem):
@@ -63,7 +63,7 @@ class TimePressurePlot(QWidget):
         lay=QVBoxLayout(self)
         lay.setContentsMargins(0,0,0,0)
 
-        pg.setConfigOptions(background=BG, foreground=PLOT_FG)
+        pg.setConfigOptions(background=style.BG, foreground=style.PLOT_FG)
         self.axis = DynamicMinuteHourAxis(orientation='bottom')
         self.plot = pg.PlotWidget(axisItems={'bottom': self.axis})
         lay.addWidget(self.plot)
@@ -72,21 +72,21 @@ class TimePressurePlot(QWidget):
         self.plot.showGrid(x=True, y=True, alpha=0.25)
         self.plot.getAxis('left').setStyle(tickFont=QFont('Consolas',10))
         self.plot.getAxis('bottom').setStyle(tickFont=QFont('Consolas',10))
-        self.plot.setLabel('left','Pressure (Torr)', color=PLOT_FG, **{'font-size':'12pt'})
-        self.axis.install_label_setter(lambda txt: self.plot.setLabel('bottom', txt, color=PLOT_FG, **{'font-size':'12pt'}))
-        self.plot.setLabel('bottom','Time (min)', color=PLOT_FG, **{'font-size':'12pt'})
+        self.plot.setLabel('left','Pressure (Torr)', color=style.PLOT_FG, **{'font-size':'12pt'})
+        self.axis.install_label_setter(lambda txt: self.plot.setLabel('bottom', txt, color=style.PLOT_FG, **{'font-size':'12pt'}))
+        self.plot.setLabel('bottom','Time (min)', color=style.PLOT_FG, **{'font-size':'12pt'})
         self.fl_curve  = self.plot.plot(pen=pg.mkPen('#2ecc40', width=2))
         self.uhv_curve = self.plot.plot(pen=pg.mkPen('#ff4136', width=2))
         self.vb.sigXRangeChanged.connect(self._on_xrange)
 
         # hover crosshair
-        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(PLOT_FG, width=1))
-        self.hline = pg.InfiniteLine(angle=0,  movable=False, pen=pg.mkPen(PLOT_FG, width=1))
+        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(style.PLOT_FG, width=1))
+        self.hline = pg.InfiniteLine(angle=0,  movable=False, pen=pg.mkPen(style.PLOT_FG, width=1))
         self.plot.addItem(self.vline, ignoreBounds=True)
         self.plot.addItem(self.hline, ignoreBounds=True)
         self.vline.hide()
         self.hline.hide()
-        self.hover = pg.TextItem(color=PLOT_FG, anchor=(0,1))
+        self.hover = pg.TextItem(color=style.PLOT_FG, anchor=(0,1))
         self.plot.addItem(self.hover)
         self.hover.hide()
         self.plot.scene().sigMouseMoved.connect(self._on_mouse)
