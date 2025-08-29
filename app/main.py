@@ -24,8 +24,8 @@ from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
 
 
-APP_ORG = "KCLab"
-APP_NAME = "InstrumentApp"
+APP_ORG = "JLab"
+APP_NAME = "MRI_Instrument_Control"
 
 
 class MainWindow(QMainWindow):
@@ -95,9 +95,15 @@ class MainWindow(QMainWindow):
     def _apply_theme(self, t: Theme):
         """Apply the selected Theme to the whole window."""
         # Gradients for big surfaces; solid for everything else
-        bg_rule = t.BG_QSS or t.BG
+        bg_rule = t.BG
         qss = f"""
             QWidget {{ background:{bg_rule}; color:{t.TXT}; }}
+            QTabWidget::pane {{position: absolute;}}
+            QTabWidget::tab-bar {{left: 15px;}}
+            QTabBar::tab {{background:{t.BTN_BG}; color:{t.TXT};
+                            padding: 6px 12px;
+                            border-top-left-radius: 8px;
+                            border-top-right-radius: 8px; }}
             QGroupBox {{ border:1px solid {t.CARD_BORDER}; border-radius:8px; padding:6px; }}
             QPushButton {{
                 color:{t.TXT}; background:{t.BTN_BG}; border:1px solid {t.BTN_BORDER};
@@ -113,7 +119,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(qss)
 
         # pyqtgraph global colors (per-theme solid)
-        pg.setConfigOptions(background=t.PLOT_BG, foreground=t.TXT)
+        pg.setConfigOptions(background=t.PLOT_BG, foreground=t.PLOT_FG)
 
         # Let pages re-apply any per-widget styles they own (optional)
         for page in (getattr(self, "pressure", None), getattr(self, "cdms", None)):
