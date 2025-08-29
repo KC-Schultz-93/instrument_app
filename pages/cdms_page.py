@@ -1,7 +1,5 @@
 # instrument_app/pages/cdms_page.py
 """
-##########      SWAP FOR SOME KIND OF READ FROM TOF
-
 CDMS tab: controls (AO/DO), acquisition source (Synthetic or PicoScope), and real-time analysis.
 Synthetic works out of the box; PicoScope sources are enabled once you add a scope service.
 
@@ -31,7 +29,7 @@ import pyqtgraph as pg
 # theming
 from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
-#from instrument_app.theme import style  # dynamic proxy (tokens of current theme)
+from instrument_app.theme import style  # dynamic proxy (tokens of current theme)
 
 
 # ----------------------------- Optional Pico (safe import) -----------------------------
@@ -93,9 +91,7 @@ class SyntheticGenerator(QObject):
             self.block_ready.emit(x16, self.fs)
             QThread.msleep(self.period_ms)
 
-    @pyqtSlot() 
-    def stop(self): 
-        self._running = False
+    @pyqtSlot() def stop(self): self._running = False
 
 
 @dataclass

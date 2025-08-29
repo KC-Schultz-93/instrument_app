@@ -1,7 +1,5 @@
 # instrument_app/services/scope_pico.py
 """
-###########################      MAY NOT NEED FOR MRI
-
 PicoScopeService: PS4000A-series ingest for the CDMS page.
 
 - Rapid Block mode: one capture per event (repeat forever).

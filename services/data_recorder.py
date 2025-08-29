@@ -11,7 +11,6 @@ Public API:
 - class DataRecorder(root="data"): append(Reading)
 
 Notes:
-- FOR MRI CONVERSION: Switch out turbo names and how to talk to them, add enough for all turbos
 - Future: daily→weekly→monthly rotation without changing callers.
 
 Changelog:

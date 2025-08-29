@@ -8,7 +8,7 @@ class ThemeManager(QObject):
         super().__init__()
         self._name = DEFAULT_THEME
         self._theme = THEMES[self._name]
-        self._settings = QSettings("JLab", "MRI_Instrument_Control")
+        self._settings = QSettings("KCLab", "InstrumentApp")
         saved = self._settings.value("theme", DEFAULT_THEME, str)
         if saved in THEMES:
             self._name = saved

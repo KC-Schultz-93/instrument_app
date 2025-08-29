@@ -6,8 +6,6 @@ from PyQt5.QtWidgets import (
 )
 from instrument_app.theme.manager import theme_mgr
 
-#Depends on theme_mgr which depends on themes
-
 class SettingsDialog(QDialog):
     """
     Minimal settings: pick theme and make it the startup default.

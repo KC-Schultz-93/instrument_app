@@ -1,8 +1,5 @@
 
 """
-
-##################     PROBABLY SWITCH OUT/MESH WITH BOSS'S SERIAL COMMS CODE
-
 Module: instrument_app.services.serial_manager
 Purpose: Threaded serial I/O for the Arduino. Periodically reads lines, parses them,
          emits structured readings, and provides a thread-safe send_command().
