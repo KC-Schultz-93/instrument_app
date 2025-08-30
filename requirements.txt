@@ -1,0 +1,13 @@
+# Core GUI + plotting + serial
+PyQt5>=5.15.9,<5.16
+pyqtgraph>=0.13.4,<0.14
+numpy>=2.1
+pyserial>=3.5,<4.0
+
+# Optional: PicoScope SDK wrappers (install PicoSDK drivers separately)
+# picosdk>=1.0,<2.0
+
+# Optional: analytics stack for a future analysis page
+# polars>=1.6
+# pyarrow>=15
+# duckdb>=0.9
