@@ -58,10 +58,48 @@ class DynamicMinuteHourAxis(pg.AxisItem):
 class TimePressurePlot(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        # ... your existing init ...
-        self.plot = pg.PlotWidget(...)  # whatever you already have
-        self.plot.setBackground(style.PLOT_BG)
+        # --- internal state ---
+        self._view = "UHV"
+        self._window = "5 min"
+        self._manual = False
+        self._ts, self._uhv, self._fl = [], [], []
+        self._drag = False
+        self._start = None
+        self._rubber = None
 
+        # --- build plot widget ---
+        self.axis = DynamicMinuteHourAxis(orientation="bottom")
+        self.axis.install_label_setter(self._set_bottom_label)
+        self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
+        self.plot.setBackground(style.PLOT_BG)
+        self.plot.setLogMode(y=True)
+
+        # curves for UHV / Foreline pressures
+        self.uhv_curve = self.plot.plot(pen=pg.mkPen(style.GOOD, width=1))
+        self.fl_curve = self.plot.plot(pen=pg.mkPen(style.BAD, width=1))
+
+        # crosshair + hover readout
+        self.vline = pg.InfiniteLine(angle=90, movable=False)
+        self.hline = pg.InfiniteLine(angle=0, movable=False)
+        self.plot.addItem(self.vline, ignoreBounds=True)
+        self.plot.addItem(self.hline, ignoreBounds=True)
+        self.vline.hide(); self.hline.hide()
+
+        self.hover = pg.TextItem(color=style.TXT)
+        self.hover.hide()
+        self.plot.addItem(self.hover, ignoreBounds=True)
+
+        # viewbox + signals
+        self.vb = self.plot.getPlotItem().getViewBox()
+        self.vb.sigXRangeChanged.connect(self._on_xrange)
+        self.plot.scene().sigMouseMoved.connect(self._on_mouse)
+        self.plot.scene().installEventFilter(self)
+
+        # lay out the widget
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.plot)
+        
         # subscribe to theme changes
         theme_mgr.themeChanged.connect(self._apply_theme)
         self._apply_theme(theme_mgr.current)

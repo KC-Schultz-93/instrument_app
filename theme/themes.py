@@ -1,13 +1,9 @@
 from dataclasses import dataclass
 
-class _StyleProxy:
-    def __getattr__(self, name: str):
-        cur = theme_mgr.current
-        if name == "PLOT_FG":
-            return cur.TXT
-        return getattr(cur, name)
-
-style = _StyleProxy()
+try:  # pragma: no cover - optional dependency
+    from .style import style  # re-export for backwards compatibility
+except Exception:  # pragma: no cover - PyQt missing
+    style = None  # type: ignore
 
 @dataclass(frozen=True)
 class Theme:
