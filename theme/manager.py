@@ -6,13 +6,12 @@ class ThemeManager(QObject):
 
     def __init__(self):
         super().__init__()
-        self._name = DEFAULT_THEME
-        self._theme = THEMES[self._name]
         self._settings = QSettings("KCLab", "InstrumentApp")
-        saved = self._settings.value("theme", DEFAULT_THEME, str)
-        if saved in THEMES:
-            self._name = saved
-            self._theme = THEMES[saved]
+        name = self._settings.value("theme", DEFAULT_THEME, str)
+        if name not in THEMES:
+            name = DEFAULT_THEME
+        self._name = name
+        self._theme = THEMES[name]
 
     @property
     def current(self) -> Theme:
@@ -22,6 +21,9 @@ class ThemeManager(QObject):
     def name(self) -> str:
         return self._name
 
+    def available(self):
+        return list(THEMES.keys())
+
     def set(self, name: str):
         if name == self._name or name not in THEMES:
             return
@@ -30,7 +32,5 @@ class ThemeManager(QObject):
         self._settings.setValue("theme", name)
         self.themeChanged.emit(self._theme)
 
-    def available(self):
-        return list(THEMES.keys())
-
 theme_mgr = ThemeManager()
+

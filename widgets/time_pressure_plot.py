@@ -24,8 +24,8 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout
 from PyQt5.QtGui import QFont
 from PyQt5.QtCore import Qt, QEvent
 import pyqtgraph as pg
-import math
-import bisect
+import math, bisect
+
 from instrument_app.theme import style
 from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
@@ -58,65 +58,35 @@ class DynamicMinuteHourAxis(pg.AxisItem):
 class TimePressurePlot(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._view = "UHV"
-        self._ts=[]
-        self._uhv=[]
-        self._fl=[]
-        lay=QVBoxLayout(self)
-        lay.setContentsMargins(0,0,0,0)
-
+        # ... your existing init ...
+        self.plot = pg.PlotWidget(...)  # whatever you already have
         self.plot.setBackground(style.PLOT_BG)
-        self.axis = DynamicMinuteHourAxis(orientation='bottom')
-        self.plot = pg.PlotWidget(axisItems={'bottom': self.axis})
-        lay.addWidget(self.plot)
-        self.vb = self.plot.getPlotItem().getViewBox()
-        self.plot.setLogMode(y=True)
-        self.plot.showGrid(x=True, y=True, alpha=0.25)
-        self.plot.getAxis('left').setStyle(tickFont=QFont('Consolas',10))
-        self.plot.getAxis('bottom').setStyle(tickFont=QFont('Consolas',10))
-        self.plot.setLabel('left','Pressure (Torr)', **{'font-size':'12pt'})
-        self.axis.install_label_setter(self._set_bottom_label)
-        self._set_bottom_label('Time (min)')
-        self.fl_curve  = self.plot.plot(pen=pg.mkPen('#2ecc40', width=2))
-        self.uhv_curve = self.plot.plot(pen=pg.mkPen('#ff4136', width=2))
-        self.vb.sigXRangeChanged.connect(self._on_xrange)
 
-        # hover crosshair
-        self.vline = pg.InfiniteLine(angle=90, movable=False)
-        self.hline = pg.InfiniteLine(angle=0,  movable=False)
-        self.plot.addItem(self.vline, ignoreBounds=True)
-        self.plot.addItem(self.hline, ignoreBounds=True)
-        self.vline.hide()
-        self.hline.hide()
-        self.hover = pg.TextItem(anchor=(0,1))
-        self.plot.addItem(self.hover)
-        self.hover.hide()
-        self.plot.scene().sigMouseMoved.connect(self._on_mouse)
-
-        self.plot.scene().installEventFilter(self)
-        self._rubber=None
-        self._drag=False
-        self._start=None
-        self._manual=False
-        self._window="1 hour"
-
+        # subscribe to theme changes
         theme_mgr.themeChanged.connect(self._apply_theme)
         self._apply_theme(theme_mgr.current)
 
-    def _set_bottom_label(self, txt: str):
-        self.plot.setLabel('bottom', txt, color=style.PLOT_FG, **{'font-size':'12pt'})
-
+    # --- theme hook ---
     def _apply_theme(self, t: Theme):
         self.plot.setBackground(t.PLOT_BG)
-        self.plot.setLabel('left', 'Pressure (Torr)', color=t.PLOT_FG, **{'font-size':'12pt'})
-        self._set_bottom_label('Time (hr)' if self.axis.mode=='hr' else 'Time (min)')
-        self.plot.getAxis('left').setPen(pg.mkPen(t.PLOT_FG))
-        self.plot.getAxis('left').setTextPen(pg.mkPen(t.PLOT_FG))
-        self.axis.setPen(pg.mkPen(t.PLOT_FG))
-        self.axis.setTextPen(pg.mkPen(t.PLOT_FG))
-        self.vline.setPen(pg.mkPen(t.PLOT_FG, width=1))
-        self.hline.setPen(pg.mkPen(t.PLOT_FG, width=1))
-        self.hover.setColor(t.PLOT_FG)
+        self.plot.setLabel('left', 'Pressure (Torr)', color=style.TXT, **{'font-size': '12pt'})
+        self._set_bottom_label('Time (hr)' if getattr(self.axis, "mode", "min") == 'hr' else 'Time (min)')
+
+        pen = pg.mkPen(style.TXT)
+        self.plot.getAxis('left').setPen(pen)
+        self.plot.getAxis('left').setTextPen(pen)
+        if hasattr(self, "axis"):           # bottom axis item
+            self.axis.setPen(pen)
+            self.axis.setTextPen(pen)
+        if hasattr(self, "vline"):
+            self.vline.setPen(pg.mkPen(style.TXT, width=1))
+        if hasattr(self, "hline"):
+            self.hline.setPen(pg.mkPen(style.TXT, width=1))
+        if hasattr(self, "hover"):
+            self.hover.setColor(style.TXT)
+
+    def _set_bottom_label(self, txt: str):
+        self.plot.setLabel('bottom', txt, color=style.TXT, **{'font-size': '12pt'})
         
     def set_view(self, which:str):
         self._view=which

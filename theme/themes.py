@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-# instrument_app/theme/style.py
-from .manager import theme_mgr
 
 class _StyleProxy:
     def __getattr__(self, name: str):

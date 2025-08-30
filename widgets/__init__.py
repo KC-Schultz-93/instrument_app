@@ -1,4 +1,3 @@
-import pyqtgraph as pg
-from instrument_app.theme import style
-
-pg.setConfigOptions(background=style.PLOT_BG, foreground=style.TXT)
+# instrument_app/widgets/__init__.py
+# Don't import anything here to avoid side-effects at package import time.
+__all__ = ["time_pressure_plot"]
