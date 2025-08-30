@@ -91,9 +91,7 @@ class SyntheticGenerator(QObject):
             self.block_ready.emit(x16, self.fs)
             QThread.msleep(self.period_ms)
 
-    @pyqtSlot() 
-    def stop(self):
-        self._running = False
+    @pyqtSlot() def stop(self): self._running = False
 
 
 @dataclass
