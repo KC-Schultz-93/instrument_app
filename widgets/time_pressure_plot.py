@@ -27,6 +27,8 @@ import pyqtgraph as pg
 import math
 import bisect
 from instrument_app.theme import style
+from instrument_app.theme.manager import theme_mgr
+from instrument_app.theme.themes import Theme
 from instrument_app.util.parsing import Reading
 
 class DynamicMinuteHourAxis(pg.AxisItem):
@@ -63,7 +65,6 @@ class TimePressurePlot(QWidget):
         lay=QVBoxLayout(self)
         lay.setContentsMargins(0,0,0,0)
 
-        pg.setConfigOptions(background=style.PLOT_BG, foreground=style.TXT)
         self.plot.setBackground(style.PLOT_BG)
         self.axis = DynamicMinuteHourAxis(orientation='bottom')
         self.plot = pg.PlotWidget(axisItems={'bottom': self.axis})
@@ -73,21 +74,21 @@ class TimePressurePlot(QWidget):
         self.plot.showGrid(x=True, y=True, alpha=0.25)
         self.plot.getAxis('left').setStyle(tickFont=QFont('Consolas',10))
         self.plot.getAxis('bottom').setStyle(tickFont=QFont('Consolas',10))
-        self.plot.setLabel('left','Pressure (Torr)', color=style.PLOT_FG, **{'font-size':'12pt'})
-        self.axis.install_label_setter(lambda txt: self.plot.setLabel('bottom', txt, color=style.PLOT_FG, **{'font-size':'12pt'}))
-        self.plot.setLabel('bottom','Time (min)', color=style.PLOT_FG, **{'font-size':'12pt'})
+        self.plot.setLabel('left','Pressure (Torr)', **{'font-size':'12pt'})
+        self.axis.install_label_setter(self._set_bottom_label)
+        self._set_bottom_label('Time (min)')
         self.fl_curve  = self.plot.plot(pen=pg.mkPen('#2ecc40', width=2))
         self.uhv_curve = self.plot.plot(pen=pg.mkPen('#ff4136', width=2))
         self.vb.sigXRangeChanged.connect(self._on_xrange)
 
         # hover crosshair
-        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen(style.PLOT_FG, width=1))
-        self.hline = pg.InfiniteLine(angle=0,  movable=False, pen=pg.mkPen(style.PLOT_FG, width=1))
+        self.vline = pg.InfiniteLine(angle=90, movable=False)
+        self.hline = pg.InfiniteLine(angle=0,  movable=False)
         self.plot.addItem(self.vline, ignoreBounds=True)
         self.plot.addItem(self.hline, ignoreBounds=True)
         self.vline.hide()
         self.hline.hide()
-        self.hover = pg.TextItem(color=style.PLOT_FG, anchor=(0,1))
+        self.hover = pg.TextItem(anchor=(0,1))
         self.plot.addItem(self.hover)
         self.hover.hide()
         self.plot.scene().sigMouseMoved.connect(self._on_mouse)
@@ -99,6 +100,24 @@ class TimePressurePlot(QWidget):
         self._manual=False
         self._window="1 hour"
 
+        theme_mgr.themeChanged.connect(self._apply_theme)
+        self._apply_theme(theme_mgr.current)
+
+    def _set_bottom_label(self, txt: str):
+        self.plot.setLabel('bottom', txt, color=style.PLOT_FG, **{'font-size':'12pt'})
+
+    def _apply_theme(self, t: Theme):
+        self.plot.setBackground(t.PLOT_BG)
+        self.plot.setLabel('left', 'Pressure (Torr)', color=t.PLOT_FG, **{'font-size':'12pt'})
+        self._set_bottom_label('Time (hr)' if self.axis.mode=='hr' else 'Time (min)')
+        self.plot.getAxis('left').setPen(pg.mkPen(t.PLOT_FG))
+        self.plot.getAxis('left').setTextPen(pg.mkPen(t.PLOT_FG))
+        self.axis.setPen(pg.mkPen(t.PLOT_FG))
+        self.axis.setTextPen(pg.mkPen(t.PLOT_FG))
+        self.vline.setPen(pg.mkPen(t.PLOT_FG, width=1))
+        self.hline.setPen(pg.mkPen(t.PLOT_FG, width=1))
+        self.hover.setColor(t.PLOT_FG)
+        
     def set_view(self, which:str):
         self._view=which
         self._update()
