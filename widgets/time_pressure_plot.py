@@ -63,7 +63,8 @@ class TimePressurePlot(QWidget):
         lay=QVBoxLayout(self)
         lay.setContentsMargins(0,0,0,0)
 
-        pg.setConfigOptions(background=style.BG, foreground=style.PLOT_FG)
+        pg.setConfigOptions(background=style.PLOT_BG, foreground=style.TXT)
+        self.plot.setBackground(style.PLOT_BG)
         self.axis = DynamicMinuteHourAxis(orientation='bottom')
         self.plot = pg.PlotWidget(axisItems={'bottom': self.axis})
         lay.addWidget(self.plot)
