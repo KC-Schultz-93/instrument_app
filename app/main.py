@@ -19,8 +19,8 @@ from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
 from instrument_app.app.settings_dialog import SettingsDialog
 
-APP_ORG = "KCLab"
-APP_NAME = "InstrumentApp"
+APP_ORG = "JohnsonLab"
+APP_NAME = "NanoInstrumentApp"
 
 
 class MainWindow(QMainWindow):

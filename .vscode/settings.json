@@ -1,11 +1,22 @@
 {
     "cSpell.words": [
+        "Endcap",
         "Foreline",
         "gridline",
+        "hline",
         "logdir",
         "mbar",
+        "msleep",
+        "mult",
+        "ndarray",
         "Pico",
         "pyqtgraph",
+        "rfft",
+        "Segoe",
+        "setc",
+        "spinboxes",
+        "viewbox",
+        "vline",
         "vmax",
         "vmin"
     ]
