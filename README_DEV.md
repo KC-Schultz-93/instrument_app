@@ -1,12 +1,31 @@
-# instrument_app developer notes
+## instrument_app developer notes
 
 ## Running the app
 
-From the repository root:
+From the parent folder that contains the `instrument_app/` package:
 
-```bash
-python -m instrument_app
+```powershell
+Set-Location path\to\Codes
+py -3.12 -m instrument_app
 ```
+
+From inside the package itself:
+
+```powershell
+Set-Location path\to\Codes\instrument_app
+py -3.12 -m app.main
+```
+
+After installing in editable mode, the app can be launched from any
+directory:
+
+```powershell
+py -3.12 -m pip install -e instrument_app
+py -3.12 -m instrument_app
+```
+
+Windows users can also run `run.ps1` or `run.bat`; these scripts print a
+helpful hint when the package cannot be imported.
 
 ## Theming contract
 
