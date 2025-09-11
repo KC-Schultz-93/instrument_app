@@ -2,23 +2,40 @@
 
 ## Running the app
 
-From the repository root that contains the `instrument_app/` package:
+Recommended: use Python 3.12 and a virtual environment.
 
 ```powershell
-Set-Location path\to\Codes
+# Create venv (first time)
+py -3.12 -m venv .venv
+
+# Activate
+. .venv\Scripts\Activate.ps1   # PowerShell
+
+# Install deps
+python -m pip install -U pip
+python -m pip install -r requirements.txt
+```
+
+Run the app during development (no install required):
+
+```powershell
+# Option A: from anywhere
+./run.ps1
+
+# Option B: from the repo parent folder
+Set-Location ..    # go to the folder that contains 'instrument_app'
 py -3.12 -m instrument_app
 ```
 
-After installing in editable mode, the app can be launched from any
-directory:
+Install in editable mode (creates an `instrument-app` command and adds deps):
 
 ```powershell
-py -3.12 -m pip install -e instrument_app
-py -3.12 -m instrument_app
+python -m pip install -e .
+instrument-app
 ```
 
-Windows users can also run `run.ps1` or `run.bat`; these scripts print a
-helpful hint when the package cannot be imported.
+Windows users can also run `run.ps1` or `run.bat` from any directory; the
+scripts resolve the repository root automatically.
 
 ## Theming contract
 

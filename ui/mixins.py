@@ -14,8 +14,10 @@ class ThemedMixin:
 
     def __init__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         super().__init__(*args, **kwargs)
+        # Subscribe to future theme changes. We intentionally avoid applying
+        # the theme immediately here because composite widgets may not have
+        # finished constructing child members yet.
         theme_mgr.themeChanged.connect(self.apply_theme)  # type: ignore[arg-type]
-        self.apply_theme(theme_mgr.current)
 
     def apply_theme(self, theme: Theme) -> None:  # pragma: no cover - to be overridden
         """Apply colors/fonts for *theme*.

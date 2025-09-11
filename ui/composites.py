@@ -50,7 +50,8 @@ class PressureCard(QFrame, ThemedMixin):
         self.setStyleSheet(
             f"QFrame#card{{background:{t.CARD_BG}; border:1px solid {t.CARD_BORDER}; border-radius:12px;}}"
         )
-        self.caption.setStyleSheet("font:11pt 'Segoe UI';")
+        if hasattr(self, "caption"):
+            self.caption.setStyleSheet("font:11pt 'Segoe UI';")
 
 
 class PumpCard(QFrame, ThemedMixin):
@@ -84,7 +85,8 @@ class PumpCard(QFrame, ThemedMixin):
         self.setStyleSheet(
             f"QFrame#card{{background:{t.CARD_BG}; border:1px solid {t.CARD_BORDER}; border-radius:12px;}}"
         )
-        self.caption.setStyleSheet("font:11pt 'Segoe UI';")
+        if hasattr(self, "caption"):
+            self.caption.setStyleSheet("font:11pt 'Segoe UI';")
 
 
 class PortToolbar(QWidget, ThemedMixin):
@@ -132,9 +134,11 @@ class PortToolbar(QWidget, ThemedMixin):
         self.conn.setToolTip(tip)
 
     def apply_theme(self, t: Theme) -> None:  # pragma: no cover - trivial
-        self.port_cb.setStyleSheet(
-            f"QComboBox{{color:{t.TXT}; background:{t.BTN_BG}; border:1px solid {t.BTN_BORDER}; padding:4px 8px; border-radius:8px;}}"
-        )
+        # During construction, apply_theme may be called before child widgets exist.
+        if hasattr(self, "port_cb"):
+            self.port_cb.setStyleSheet(
+                f"QComboBox{{color:{t.TXT}; background:{t.BTN_BG}; border:1px solid {t.BTN_BORDER}; padding:4px 8px; border-radius:8px;}}"
+            )
 
 
 class AODOPanel(QWidget, ThemedMixin):

@@ -1,7 +1,17 @@
-py -3.12 -c "import instrument_app" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "instrument_app not found. Run from the repository root or install with 'py -3.12 -m pip install -e instrument_app'."
-    exit 1
-}
+# Launch from anywhere on Windows PowerShell.
+# Ensures we import the repo package without requiring installation.
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Path $PSScriptRoot -Parent
 
-py -3.12 -m instrument_app @Args
+Push-Location $repo
+try {
+    $venvPy = Join-Path $PSScriptRoot '.venv312\Scripts\python.exe'
+    if (Test-Path $venvPy) {
+        & $venvPy -m instrument_app @Args
+    } else {
+        py -3.12 -m instrument_app @Args
+    }
+}
+finally {
+    Pop-Location
+}

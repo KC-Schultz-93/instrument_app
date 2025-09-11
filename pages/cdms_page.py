@@ -27,6 +27,7 @@ import pyqtgraph as pg
 
 # theming
 from instrument_app.ui import AODOPanel, AcquisitionPanel, PillLabel
+from instrument_app.theme.manager import theme_mgr
 
 
 # ----------------------------- Optional Pico (safe import) -----------------------------
@@ -126,8 +127,11 @@ class Analyzer(QObject):
         hits = 0
         for mult, frac in [(2, 0.015), (3, 0.02)]:
             km = near_bin(mult * f0)
-            lo = max(0, int(km*(1-frac))); hi = min(len(mag)-1, int(km*(1+frac)))
-            if np.max(mag[lo:hi+1]) > thr: hits += 1
+            lo = max(0, int(km * (1 - frac)))
+            hi = min(len(mag) - 1, int(km * (1 + frac)))
+            seg = mag[lo:hi+1]
+            if seg.size and np.max(seg) > thr:
+                hits += 1
 
         cls = "single" if hits >= 1 else ("multiple" if n_peaks >= 2 else "single")
         self.event_result.emit(EventResult(cls, f0, snr_db, n_peaks, ts))

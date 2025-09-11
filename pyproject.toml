@@ -6,4 +6,12 @@ build-backend = "setuptools.build_meta"
 name = "instrument-app"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "PyQt5>=5.15.9,<5.16",
+    "pyqtgraph>=0.13.4,<0.14",
+    "numpy>=2.1",
+    "pyserial>=3.5,<4.0",
+]
+
+[project.scripts]
+instrument-app = "instrument_app.app.main:main"
