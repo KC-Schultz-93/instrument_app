@@ -86,7 +86,9 @@ class PressureInterlockPage(QWidget):
         bottom = QHBoxLayout(); bottom.setSpacing(8)
         self.btn_view_fore = ThemedButton("Foreline", height=34)
         self.btn_view_uhv = ThemedButton("UHV", height=34)
-        self.range_cb = QComboBox(); self.range_cb.addItems(["1 min", "10 min", "1 hour", "6 hours", "24 hours"]); self.range_cb.setFixedHeight(34)
+        self.range_cb = QComboBox(); 
+        self.range_cb.addItems(["1 min", "10 min", "1 hour", "6 hours", "24 hours"]); 
+        self.range_cb.setFixedHeight(34)
         self.btn_reset = ThemedButton("Reset View", height=34)
         bottom.addStretch(1)
         bottom.addWidget(self.btn_view_fore)
