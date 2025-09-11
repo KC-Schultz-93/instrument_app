@@ -2,18 +2,11 @@
 
 ## Running the app
 
-From the parent folder that contains the `instrument_app/` package:
+From the repository root that contains the `instrument_app/` package:
 
 ```powershell
 Set-Location path\to\Codes
 py -3.12 -m instrument_app
-```
-
-From inside the package itself:
-
-```powershell
-Set-Location path\to\Codes\instrument_app
-py -3.12 -m app.main
 ```
 
 After installing in editable mode, the app can be launched from any

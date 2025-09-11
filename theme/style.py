@@ -4,7 +4,7 @@ Module: instrument_app.theme.style
 Purpose: Centralized colors and shared style tokens for a consistent dark UI.
 
 How it fits:
-- Used by: pages, widgets, app.main (global stylesheet)
+- Used by: pages, widgets, instrument_app.__main__ (global stylesheet)
 
 Public API:
 - Color constants: BG, CARD_BG, CARD_BORDER, PLOT_FG, BTN_BG, BTN_BG_DOWN, BTN_BORDER, TXT, GOOD, BAD, GRAY

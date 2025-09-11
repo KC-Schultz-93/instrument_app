@@ -25,11 +25,11 @@ from .primitives import ThemedButton, PillLabel, ValueDisplay, IconDot
 from instrument_app.theme.themes import Theme
 
 
-class PressureCard(ThemedMixin, QFrame):
+class PressureCard(QFrame, ThemedMixin):
     """Card showing a pressure value."""
 
     def __init__(self, title: str, parent: Optional[QWidget] = None):
-        super().__init__(parent)
+        QFrame.__init__(self, parent)
         self.setObjectName("card")
         self.setFixedHeight(110)
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
@@ -43,6 +43,8 @@ class PressureCard(ThemedMixin, QFrame):
         self.value = ValueDisplay("--  TORR")
         lay.addWidget(self.caption)
         lay.addWidget(self.value, 1)
+        
+        ThemedMixin.__init__(self)
 
     def apply_theme(self, t: Theme) -> None:  # pragma: no cover - trivial
         self.setStyleSheet(
@@ -51,11 +53,11 @@ class PressureCard(ThemedMixin, QFrame):
         self.caption.setStyleSheet("font:11pt 'Segoe UI';")
 
 
-class PumpCard(ThemedMixin, QFrame):
+class PumpCard(QFrame, ThemedMixin):
     """Card containing run/stop controls for a pump."""
 
     def __init__(self, name: str, parent: Optional[QWidget] = None):
-        super().__init__(parent)
+        QFrame.__init__(self, parent)
         self.setObjectName("card")
         self.setFixedHeight(110)
 
@@ -75,6 +77,8 @@ class PumpCard(ThemedMixin, QFrame):
 
         lay.addLayout(head)
         lay.addLayout(btnrow)
+        
+        ThemedMixin.__init__(self)
 
     def apply_theme(self, t: Theme) -> None:  # pragma: no cover - trivial
         self.setStyleSheet(
@@ -83,7 +87,7 @@ class PumpCard(ThemedMixin, QFrame):
         self.caption.setStyleSheet("font:11pt 'Segoe UI';")
 
 
-class PortToolbar(ThemedMixin, QWidget):
+class PortToolbar(QWidget, ThemedMixin):
     """Top toolbar for serial port selection and connection controls."""
 
     refresh = pyqtSignal()
@@ -114,6 +118,8 @@ class PortToolbar(ThemedMixin, QWidget):
         self.btn_connect.clicked.connect(self._emit_connect)
         self.btn_disconnect.clicked.connect(self.disconnect_requested)
         self.btn_status.clicked.connect(self.status_requested)
+        
+        ThemedMixin.__init__(self)
 
     def _emit_connect(self) -> None:
         data = self.port_cb.currentData()
@@ -131,7 +137,7 @@ class PortToolbar(ThemedMixin, QWidget):
         )
 
 
-class AODOPanel(ThemedMixin, QWidget):
+class AODOPanel(QWidget, ThemedMixin):
     """Analog and digital output controls."""
 
     apply_ao = pyqtSignal(float, float, int)
@@ -139,7 +145,7 @@ class AODOPanel(ThemedMixin, QWidget):
     pulse_do = pyqtSignal(str, int)
 
     def __init__(self, parent: Optional[QWidget] = None):
-        super().__init__(parent)
+        QWidget.__init__(self, parent)
         lay = QVBoxLayout(self); lay.setSpacing(10)
 
         # AO group
@@ -174,6 +180,8 @@ class AODOPanel(ThemedMixin, QWidget):
 
         self._spin_boxes = [self.sp_ao0, self.sp_ao1, self.sp_ramp]
         self._checkboxes = [self.chk_do0, self.chk_do1]
+        
+        ThemedMixin.__init__(self)
 
     def _cfg_spin(self, sp, mn, mx, step, val, suffix):
         if isinstance(sp, QDoubleSpinBox):
