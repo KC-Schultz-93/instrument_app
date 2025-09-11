@@ -1,1 +1,73 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.tox/
+.nox/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# Type checkers / linters
+.mypy_cache/
+.pytype/
+.ruff_cache/
+.pylint.d/
+
+# Environments
+.venv/
+venv/
+env/
+.env
+.venv312/
+
+# Editor / IDE
+.vscode/
+.idea/
+.vs/
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / local overrides
+*.log
+*.local
+
+# Project-specific
 read_me.toml
+
+#Dev helpers
+run_smoke.ps1
+smoke.py

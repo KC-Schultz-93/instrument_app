@@ -107,6 +107,7 @@ class PortToolbar(QWidget, ThemedMixin):
         self.btn_disconnect = ThemedButton("Disconnect", height=36)
         self.btn_status = ThemedButton("STATUS", height=36)
         self.conn = PillLabel("Connection: Not connected", bg_role=lambda t: t.BAD,)
+        self.conn.setFixedHeight(36)
 
         lay.addWidget(self.port_cb, 1)
         lay.addWidget(self.btn_refresh)
