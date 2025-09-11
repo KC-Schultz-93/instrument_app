@@ -36,7 +36,7 @@ from instrument_app.theme import style
 from instrument_app.ui import (
     PortToolbar, PressureCard, PumpCard, ThemedButton, TimePressureView,
 )
-from instrument_app.util.parsing import Reading
+from instrument_app.services.parsing import Reading
 
 
 class PressureInterlockPage(QWidget):

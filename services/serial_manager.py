@@ -5,7 +5,7 @@ Purpose: Threaded serial I/O for the Arduino. Periodically reads lines, parses t
          emits structured readings, and provides a thread-safe send_command().
 
 How it fits:
-- Depends on: pyserial, PyQt (QThread/QTimer), instrument_app.util.parsing
+- Depends on: pyserial, PyQt (QThread/QTimer), instrument_app.services.parsing
 - Used by:    PressureInterlockPage (subscribe to signals), MainWindow (lifecycle)
 
 Public API:
@@ -24,7 +24,7 @@ from PyQt5.QtCore import QObject, pyqtSignal, QThread, QTimer
 from serial.tools import list_ports
 import serial
 from time import sleep
-from instrument_app.util.parsing import parse_arduino_line, Reading
+from instrument_app.services.parsing import parse_arduino_line, Reading
 from instrument_app.config.settings import BAUD_RATE, READ_PERIOD_MS
 
 class SerialWorker(QObject):

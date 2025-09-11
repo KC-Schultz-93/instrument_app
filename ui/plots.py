@@ -7,7 +7,7 @@ Purpose: Reusable pyqtgraph plot widget for pressure vs. time (log-Y), with:
          - RMB rubber-band zoom.
 
 How it fits:
-- Depends on: pyqtgraph, instrument_app.theme.style, instrument_app.util.parsing.Reading
+- Depends on: pyqtgraph, instrument_app.theme.style, instrument_app.services.parsing.Reading
 - Used by:    PressureInterlockPage
 
 Public API:
@@ -31,7 +31,7 @@ import math, bisect
 from instrument_app.theme import style
 from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
-from instrument_app.util.parsing import Reading
+from instrument_app.services.parsing import Reading
 
 
 class DynamicMinuteHourAxis(pg.AxisItem):

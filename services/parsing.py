@@ -1,6 +1,6 @@
 
 """
-Module: instrument_app.util.parsing
+Module: instrument_app.services.parsing
 Purpose: Parse Arduino CSV-ish lines into a typed Reading dataclass.
 
 How it fits:

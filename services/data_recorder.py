@@ -4,7 +4,7 @@ Module: instrument_app.services.data_recorder
 Purpose: Single-writer CSV logger for readings with timestamped filename.
 
 How it fits:
-- Depends on: pathlib/csv, instrument_app.util.parsing.Reading
+- Depends on: pathlib/csv, instrument_app.services.parsing.Reading
 - Used by:    PressureInterlockPage (append on each reading)
 
 Public API:
@@ -21,7 +21,7 @@ Changelog:
 import csv
 from datetime import datetime
 from pathlib import Path
-from instrument_app.util.parsing import Reading
+from instrument_app.services.parsing import Reading
 from instrument_app.config.settings import CSV_BASENAME
 
 class DataRecorder:
