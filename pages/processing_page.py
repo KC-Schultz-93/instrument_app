@@ -25,7 +25,10 @@ import pyqtgraph as pg
 from instrument_app.processing.geo_calibration import (
     load_calibration, configure_processing, process_frame,
     HistState, update_hist, export_hist, Ion, CDMSCalibration,
+    build_charge_cal_from_calibration,
 )
+from instrument_app.core.bus import bus
+from instrument_app.core.app_context import ctx
 
 # Optional Pico import (graceful fallback)
 HAVE_PICO = False
@@ -34,51 +37,6 @@ try:
     HAVE_PICO = True
 except Exception:  # pragma: no cover - optional dependency
     PicoScopeService = None  # type: ignore
-
-
-class ProcessingWorker(QObject):
-    ions_ready = pyqtSignal(object)  # List[Ion]
-    status = pyqtSignal(str)
-
-    def __init__(self):
-        super().__init__()
-        self._calib: Optional[CDMSCalibration] = None
-        self._E_default: float = 1_000.0  # eV/z
-        self._V_default: Optional[float] = None
-        self._configured = False
-
-    @pyqtSlot(object)
-    def set_calibration(self, calib: object):
-        self._calib = calib  # CDMSCalibration
-        self.status.emit("Calibration set")
-
-    @pyqtSlot(float)
-    def set_E_default(self, E: float):
-        self._E_default = float(E)
-
-    @pyqtSlot(float)
-    def set_V_default(self, V: float):
-        self._V_default = float(V)
-
-    @pyqtSlot(object, float)
-    def process_block(self, x_i16: object, fs_hz: float):
-        if self._calib is None:
-            self.status.emit("No calibration set; dropping frame.")
-            return
-        if not self._configured:
-            # Initialize processing configuration with actual sample rate
-            configure_processing(fs_hz=float(fs_hz))
-            self._configured = True
-            self.status.emit(f"Processing configured: fs={fs_hz:,.0f} Hz")
-        try:
-            x16 = np.asarray(x_i16, dtype=np.int16)
-            x = x16.astype(np.float32)
-            ions: List[Ion] = process_frame(x, self._E_default, self._V_default,
-                                            calib=self._calib, reject_overlap_hz=None)
-            if ions:
-                self.ions_ready.emit(ions)
-        except Exception as e:
-            self.status.emit(f"Processing error: {e}")
 
 
 class ProcessingPage(QWidget):
@@ -93,14 +51,11 @@ class ProcessingPage(QWidget):
         self._last_events = 0
         self._t0 = None
 
-        self._pico: Optional[PicoScopeService] = None
-        self._pico_thread: Optional[QThread] = None
-        self._worker = ProcessingWorker()
-        self._worker_thread = QThread(); self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.start()
+        # central pipeline: subscribe to bus emissions
 
         self._build_ui()
         self._wire_signals()
+        self._load_default_calibration()
 
         # rate timer
         self._rate_timer = QTimer(self); self._rate_timer.setInterval(1000)
@@ -146,8 +101,20 @@ class ProcessingPage(QWidget):
         self.btn_stop.clicked.connect(self._stop)
         self.btn_export.clicked.connect(self._export_hist)
         self.btn_snapshot.clicked.connect(self._export_snapshot)
-        # worker updates
-        self._worker.ions_ready.connect(self._on_ions_ready)
+        # subscribe to bus
+        bus.ions_batch.connect(self._on_ions_ready)
+        bus.status.connect(lambda s: None)  # could surface in UI later
+
+    def _load_default_calibration(self):
+        # Attempt to load repository-bundled calibration
+        default_path = Path(__file__).resolve().parent.parent / "processing" / "calibration_files" / "SIMION_Calibration.json"
+        if default_path.exists():
+            try:
+                calib = load_calibration(str(default_path))
+                self._set_active_calibration(calib, default_path)
+            except Exception as e:
+                # non-fatal; UI remains usable for manual load
+                pass
 
     # --------------- actions ---------------
     def _choose_calibration(self):
@@ -156,48 +123,52 @@ class ProcessingPage(QWidget):
             return
         try:
             calib = load_calibration(p)
-            self._calib = calib
-            self.lbl_calib.setText(Path(p).name)
-            # Default V from calibration if provided
-            if calib.voltage_median:
-                try:
-                    self.sp_V.setValue(float(calib.voltage_median))
-                except Exception:
-                    pass
-            # push to worker
-            self._worker.set_calibration(calib)
+            self._set_active_calibration(calib, Path(p))
         except Exception as e:
             QMessageBox.warning(self, "Calibration", f"Failed to load: {e}")
 
+    def _set_active_calibration(self, calib: CDMSCalibration, path: Path) -> None:
+        self._calib = calib
+        # Show file name and key metadata
+        meta_bits = []
+        if calib.voltage_median is not None:
+            meta_bits.append(f"Vmed={float(calib.voltage_median):.2f} V")
+        if getattr(calib, 'r2', None) is not None:
+            try:
+                meta_bits.append(f"R²={float(calib.r2):.4f}")
+            except Exception:
+                pass
+        suffix = (" (" + ", ".join(meta_bits) + ")") if meta_bits else ""
+        self.lbl_calib.setText(f"{path.name}{suffix}")
+        # Default V from calibration if provided
+        if calib.voltage_median:
+            try:
+                self.sp_V.setValue(float(calib.voltage_median))
+            except Exception:
+                pass
+        # push to central processor
+        ctx.processor.set_calibration(calib)
+
     def _start(self):
-        if not HAVE_PICO:
-            QMessageBox.information(self, "PicoScope", "PicoSDK/service not installed.")
-            return
         if self._calib is None:
             QMessageBox.information(self, "Calibration", "Load a calibration JSON first.")
             return
         # update defaults
-        self._worker.set_E_default(self.sp_E.value())
-        self._worker.set_V_default(self.sp_V.value())
-        # start pico thread if not running
-        if self._pico_thread is None:
-            self._pico_thread = QThread(); self._pico = PicoScopeService()
-            self._pico.moveToThread(self._pico_thread)
-            # Connect scope -> worker (queued cross-thread)
-            self._pico.block_ready.connect(self._worker.process_block, Qt.QueuedConnection)
-            self._pico_thread.start()
-        QTimer.singleShot(0, self._pico.start_rapid_block)
+        ctx.processor.set_E_default(self.sp_E.value())
+        ctx.processor.set_V_default(self.sp_V.value())
+        # start source via SourceManager (Pico Rapid for now)
+        try:
+            ctx.sources.start_pico_rapid()
+        except Exception as e:
+            QMessageBox.information(self, "Source", f"Failed to start Pico: {e}")
+            return
         self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
         self._rate_timer.start()
         self._events_seen = 0; self._ions_seen = 0; self._last_events = 0
         self._refresh_stats()
 
     def _stop(self):
-        if self._pico and self._pico_thread and self._pico_thread.isRunning():
-            try: self._pico.stop()
-            except Exception: pass
-            self._pico_thread.quit(); self._pico_thread.wait()
-        self._pico = None; self._pico_thread = None
+        ctx.sources.stop()
         self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False)
         self._rate_timer.stop(); self.lbl_rate.setText("Rate: 0.0 evt/s")
 
@@ -247,4 +218,3 @@ class ProcessingPage(QWidget):
                 self._worker_thread.quit(); self._worker_thread.wait()
         finally:
             super().closeEvent(ev)
-

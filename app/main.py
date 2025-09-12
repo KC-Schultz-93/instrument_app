@@ -15,6 +15,8 @@ from instrument_app.pages.cdms_page import CDMSPage
 from instrument_app.pages.processing_page import ProcessingPage
 from instrument_app.services.serial_manager import SerialManager
 from instrument_app.services.data_recorder import DataRecorder
+from instrument_app.services.ion_recorder import IonRecorder
+from instrument_app.core.app_context import ctx
 
 from instrument_app.theme.manager import theme_mgr
 from instrument_app.theme.themes import Theme
@@ -37,6 +39,10 @@ class MainWindow(QMainWindow):
         # services
         self.serial = SerialManager()
         self.recorder = self._make_recorder()
+        try:
+            self.ion_recorder = IonRecorder(Path.home() / "InstrumentLogs")
+        except Exception:
+            self.ion_recorder = None
 
         # tabs
         self.tabs = QTabWidget()
@@ -57,6 +63,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.pressure, "Pressures / Interlocks")
         self.tabs.addTab(self.cdms, "CDMS")
         self.tabs.addTab(self.processing, "Processing")
+        # Announce source state
+        from instrument_app.core.bus import bus
+        bus.status.connect(lambda s: None)
 
     def _build_menu(self):
         mbar = self.menuBar()

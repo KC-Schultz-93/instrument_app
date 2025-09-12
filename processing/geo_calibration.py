@@ -65,6 +65,8 @@ class CPoly:
 class CDMSCalibration:
     cpoly: CPoly
     voltage_median: Optional[float] = None
+    r2: Optional[float] = None
+    metadata: Optional[Dict[str, float]] = None
 
     @classmethod
     def load(cls, path: str | Path) -> "CDMSCalibration":
@@ -75,7 +77,20 @@ class CDMSCalibration:
         poly = js.get("C_poly", None)
         if not poly:
             raise ValueError("JSON has no C_poly. Run cdms_geometry_fit_v3.py with eV_per_z present.")
-        return cls(CPoly.from_json(poly), js.get("voltage_median", None))
+        return cls(CPoly.from_json(poly), js.get("voltage_median", None), js.get("r2", None), js.get("metadata", None))
+
+    def coefficients(self) -> Dict[str, float]:
+        return {
+            "A00": self.cpoly.A00, "A10": self.cpoly.A10, "A01": self.cpoly.A01, "A20": self.cpoly.A20,
+            "A11": self.cpoly.A11, "A02": self.cpoly.A02, "A30": self.cpoly.A30, "A21": self.cpoly.A21,
+            "A12": self.cpoly.A12, "A03": self.cpoly.A03,
+        }
+
+    def summary(self) -> Dict[str, float | None]:  # type: ignore[valid-type]
+        out: Dict[str, float | None] = {**self.coefficients()}
+        out["voltage_median"] = self.voltage_median
+        out["r2"] = self.r2
+        return out
 
 # ------------------ Simple FFT + peak pick ------------------
 
@@ -140,17 +155,36 @@ def example_charge_cal(amp: float, f_hz: float) -> float:
     # Return Coulombs.
     raise NotImplementedError
 
+def build_charge_cal_from_calibration(calib: CDMSCalibration) -> Optional[ChargeCal]:
+    """Construct a simple charge calibration from calibration metadata if available.
+
+    If calibration JSON contains keys: charge_k, charge_f0, charge_alpha,
+    use q = charge_k * amp * (f/charge_f0)^charge_alpha. Otherwise returns None.
+    """
+    md = getattr(calib, 'metadata', None) or {}
+    if 'charge_k' in md and 'charge_f0' in md:
+        k = float(md['charge_k']); f0 = float(md['charge_f0']); alpha = float(md.get('charge_alpha', 0.0))
+        def _cal(amp: float, f_hz: float) -> float:
+            return float(k * amp * ((f_hz / f0) ** alpha if f_hz > 0 else 1.0))
+        return _cal
+    return None
+
 # ------------------ Main per-frame processor ------------------
 
 @dataclass
 class IonResult:
     f_hz: float
     amp: float
-    E_ev_per_z: float
+    E_ev_per_z: Optional[float]
     V_volts: float
-    mz: float
+    mz: Optional[float]
     z: Optional[float] = None
     m_amu: Optional[float] = None
+    quality: str = "ok"
+    snr_db: Optional[float] = None
+    fwhm_hz: Optional[float] = None
+    r2_over_r1: Optional[float] = None
+    r3_over_r1: Optional[float] = None
 
 class RealTimeCDMS:
     def __init__(self,
@@ -181,40 +215,90 @@ class RealTimeCDMS:
         if not peaks:
             return []
 
-        # Optional second-stage spacing
-        if reject_overlap_hz:
-            peaks = sorted(peaks, key=lambda p: p.f_hz)
-            dedup = [peaks[0]]
-            for p in peaks[1:]:
-                if abs(p.f_hz - dedup[-1].f_hz) >= reject_overlap_hz:
-                    dedup.append(p)
-            peaks = dedup
+        # Compute FFT spectrum for resolution and harmonic ratios
+        N = len(x)
+        nfft = self.fft_cfg.nfft or int(2**math.ceil(math.log2(N)))
+        w = get_window(self.fft_cfg.window, N, fftbins=True)
+        X = np.fft.rfft(x * w, n=nfft)
+        freqs = np.fft.rfftfreq(nfft, d=1.0/self.fft_cfg.fs)
+        mag = np.abs(X)
+        df = freqs[1] - freqs[0] if len(freqs) > 1 else self.fft_cfg.fs / nfft
 
-        # Assign E values
+        # Effective frequency resolution: ~1 bin by default, allow override
+        res_hz = max(df, float(reject_overlap_hz) if reject_overlap_hz else df)
+
+        # Baseline E array from argument
         if np.isscalar(E_ev_per_z_for_peaks):
-            E = np.full(len(peaks), float(E_ev_per_z_for_peaks), dtype=float)
+            E_base = np.full(len(peaks), float(E_ev_per_z_for_peaks), dtype=float)
         else:
-            E = np.asarray(E_ev_per_z_for_peaks, dtype=float)
-            if E.shape[0] != len(peaks):
+            E_base = np.asarray(E_ev_per_z_for_peaks, dtype=float)
+            if E_base.shape[0] != len(peaks):
                 raise ValueError("Length of E_ev_per_z_for_peaks must match number of detected peaks.")
 
-        # Compute m/z using C(E,V)/f^2
-        freqs = np.array([p.f_hz for p in peaks], dtype=float)
-        Cvals = self.calib.cpoly.C(E, V)
-        mz = Cvals / (freqs**2)
+        # Overlap detection among sorted peaks
+        idx_sorted = sorted(range(len(peaks)), key=lambda i: peaks[i].f_hz)
+        overlap = [False] * len(peaks)
+        for a, b in zip(idx_sorted[:-1], idx_sorted[1:]):
+            if abs(peaks[b].f_hz - peaks[a].f_hz) < res_hz:
+                overlap[a] = True; overlap[b] = True
 
-        # Charge (optional) and mass
+        # Rough noise estimate for SNR
+        start = int(0.6 * len(mag))
+        noise_rms = float(np.std(mag[start:])) if start < len(mag) else float(np.std(mag))
+
+        # Per-peak harmonic-based E estimate helper
+        md = getattr(self.calib, 'metadata', None) or {}
+        have_harm_model = ('harm_a0' in md) and (('harm_a2' in md) or ('harm_a3' in md))
+
+        def near_amp(f):
+            if f <= 0:
+                return None
+            k = int(round(f / df))
+            if 0 <= k < len(mag):
+                lo = max(0, k-1); hi = min(len(mag)-1, k+1)
+                return float(np.max(mag[lo:hi+1]))
+            return None
+
         results: List[IonResult] = []
         for i, p in enumerate(peaks):
+            a1 = near_amp(p.f_hz)
+            a2 = near_amp(2*p.f_hz)
+            a3 = near_amp(3*p.f_hz)
+            r2 = (a2 / a1) if (a1 and a1 > 0 and a2 is not None) else None
+            r3 = (a3 / a1) if (a1 and a1 > 0 and a3 is not None) else None
+
+            e_est: Optional[float] = None
+            if have_harm_model:
+                e_est = float(md.get('harm_a0', 0.0))
+                if r2 is not None and 'harm_a2' in md:
+                    e_est += float(md['harm_a2']) * float(r2)
+                if r3 is not None and 'harm_a3' in md:
+                    e_est += float(md['harm_a3']) * float(r3)
+
+            E_val = float(E_base[i]) if e_est is None else float(e_est)
+
+            # Quality and metrics
+            quality = "ok" if not overlap[i] else "overlap"
+            snr = float(p.amp / (noise_rms + 1e-12))
+            snr_db = 20.0 * math.log10(max(snr, 1e-9))
+
+            # Compute m/z only if usable
+            mz_val: Optional[float] = None
             z_val: Optional[float] = None
             m_val: Optional[float] = None
-            if self.charge_cal is not None:
-                q_coul = self.charge_cal(p.amp, p.f_hz)  # user-defined
-                z_val = q_coul / E_CHARGE
-                m_val = z_val * mz[i]
-            results.append(IonResult(f_hz=p.f_hz, amp=p.amp,
-                                     E_ev_per_z=float(E[i]), V_volts=V,
-                                     mz=float(mz[i]), z=z_val, m_amu=m_val))
+            if quality == "ok":
+                Cval = float(self.calib.cpoly.C(np.array([E_val], dtype=float), V)[0])
+                mz_val = Cval / (p.f_hz ** 2)
+                if self.charge_cal is not None:
+                    q_coul = self.charge_cal(p.amp, p.f_hz)
+                    z_val = q_coul / E_CHARGE
+                    m_val = z_val * mz_val
+
+            results.append(IonResult(
+                f_hz=p.f_hz, amp=p.amp, E_ev_per_z=E_val, V_volts=V,
+                mz=mz_val, z=z_val, m_amu=m_val, quality=quality,
+                snr_db=snr_db, fwhm_hz=None, r2_over_r1=r2, r3_over_r1=r3,
+            ))
         return results
 
 # ------------------ Public module-level API ------------------
@@ -270,6 +354,39 @@ def process_frame(
     rtc = RealTimeCDMS(calib=calib, fft_cfg=_default_fft_cfg, charge_cal=_default_charge_cal)
     return rtc.process_frame(x, E_ev_per_z_for_peaks=E, V_volts=V, reject_overlap_hz=reject_overlap_hz)
 
+def process_frame_with_event(
+    x: np.ndarray,
+    E: float | List[float] | np.ndarray,
+    V: Optional[float],
+    *,
+    calib: CDMSCalibration,
+    reject_overlap_hz: Optional[float] = None,
+) -> Tuple[List[Ion], Dict[str, object]]:
+    """
+    Run processing and also return an event classification summary dict.
+
+    Summary keys: cls('empty'|'single'|'multi'|'ambiguous'), n_peaks, n_usable.
+    """
+    if _default_fft_cfg is None:
+        raise RuntimeError("configure_processing(fs_hz=...) must be called before process_frame().")
+    rtc = RealTimeCDMS(calib=calib, fft_cfg=_default_fft_cfg, charge_cal=_default_charge_cal)
+    ions = rtc.process_frame(x, E_ev_per_z_for_peaks=E, V_volts=V, reject_overlap_hz=reject_overlap_hz)
+    n_peaks = len(ions)
+    n_usable = sum(1 for i in ions if i.quality == "ok" and i.mz is not None)
+    if n_peaks == 0:
+        ev = {"cls": "empty", "n_peaks": 0, "n_usable": 0}
+    else:
+        amb = any(i.quality != "ok" for i in ions)
+        if n_usable == 0:
+            ev = {"cls": "ambiguous", "n_peaks": n_peaks, "n_usable": 0}
+        elif n_usable == 1 and not amb:
+            ev = {"cls": "single", "n_peaks": n_peaks, "n_usable": 1}
+        elif not amb:
+            ev = {"cls": "multi", "n_peaks": n_peaks, "n_usable": n_usable}
+        else:
+            ev = {"cls": "ambiguous", "n_peaks": n_peaks, "n_usable": n_usable}
+    return ions, ev
+
 # ------------------ Histogram helpers (optional) ------------------
 
 from dataclasses import field
@@ -323,3 +440,23 @@ def export_hist(state: HistState, path: str | Path) -> None:
         f.write("start,end,count\n")
         for i in range(len(state.counts)):
             f.write(f"{state.edges[i]},{state.edges[i+1]},{int(state.counts[i])}\n")
+
+# ------------------ Calibration verification helpers ------------------
+
+def verify_calibration(
+    ions: List[Ion],
+    expected_mz: float,
+    *,
+    use_quality_ok_only: bool = True,
+) -> Dict[str, float]:
+    """Compute mass bias and precision for a calibrant with known m/z."""
+    if use_quality_ok_only:
+        vals = np.array([i.mz for i in ions if i.mz is not None and i.quality == "ok"], dtype=float)
+    else:
+        vals = np.array([i.mz for i in ions if i.mz is not None], dtype=float)
+    if vals.size == 0:
+        return {"n": 0, "mean_mz": float("nan"), "bias_ppm": float("nan"), "stdev_ppm": float("nan")}
+    mean_mz = float(np.mean(vals))
+    bias_ppm = float((mean_mz - expected_mz) / expected_mz * 1e6)
+    stdev_ppm = float(np.std(vals) / expected_mz * 1e6)
+    return {"n": int(vals.size), "mean_mz": mean_mz, "bias_ppm": bias_ppm, "stdev_ppm": stdev_ppm}
