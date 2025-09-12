@@ -19,7 +19,15 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Dict
 
 import numpy as np
-from scipy.signal import get_window, find_peaks
+try:
+    from scipy.signal import get_window, find_peaks  # type: ignore
+    _HAVE_SCIPY = True
+except Exception:  # pragma: no cover - optional dependency at runtime
+    _HAVE_SCIPY = False
+    def get_window(*_, **__):  # type: ignore
+        raise ImportError("SciPy is required for signal processing. Install with: pip install scipy")
+    def find_peaks(*_, **__):  # type: ignore
+        raise ImportError("SciPy is required for peak picking. Install with: pip install scipy")
 
 E_CHARGE = 1.602176634e-19  # C
 
@@ -88,6 +96,8 @@ def _fft_peaks(x: np.ndarray, cfg: FFTConfig) -> List[Peak]:
     """
     Compute single-sided magnitude spectrum and pick peaks.
     """
+    if not _HAVE_SCIPY:
+        raise ImportError("SciPy is required to process frames. Please install it: pip install scipy")
     N = len(x)
     nfft = cfg.nfft or int(2**math.ceil(math.log2(N)))  # zero-pad to next pow2 (optional)
     w = get_window(cfg.window, N, fftbins=True)
