@@ -12,6 +12,7 @@ import pyqtgraph as pg
 
 from instrument_app.pages.pressure_page import PressureInterlockPage
 from instrument_app.pages.cdms_page import CDMSPage
+from instrument_app.pages.processing_page import ProcessingPage
 from instrument_app.services.serial_manager import SerialManager
 from instrument_app.services.data_recorder import DataRecorder
 
@@ -52,8 +53,10 @@ class MainWindow(QMainWindow):
     def _build_tabs(self):
         self.pressure = PressureInterlockPage(serial=self.serial, recorder=self.recorder)
         self.cdms = CDMSPage()
+        self.processing = ProcessingPage()
         self.tabs.addTab(self.pressure, "Pressures / Interlocks")
         self.tabs.addTab(self.cdms, "CDMS")
+        self.tabs.addTab(self.processing, "Processing")
 
     def _build_menu(self):
         mbar = self.menuBar()
@@ -120,7 +123,7 @@ class MainWindow(QMainWindow):
         pg.setConfigOptions(background=t.PLOT_BG, foreground=t.TXT)
 
         # let pages update any widget-level styles they own
-        for page in (getattr(self, "pressure", None), getattr(self, "cdms", None)):
+        for page in (getattr(self, "pressure", None), getattr(self, "cdms", None), getattr(self, "processing", None)):
             if page and hasattr(page, "_apply_theme_to_self"):
                 page._apply_theme_to_self(t)
 
@@ -142,6 +145,7 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self.pressure, "close"): self.pressure.close()
             if hasattr(self.cdms, "close"): self.cdms.close()
+            if hasattr(self, "processing") and hasattr(self.processing, "close"): self.processing.close()
         finally:
             super().closeEvent(ev)
 
