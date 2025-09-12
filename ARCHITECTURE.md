@@ -23,27 +23,6 @@ Additions in this change set
 - services/sources.py: Unified SyntheticSource, PicoSource, and a SourceManager to control a single active source and publish frames on the bus. Pages can subscribe to the bus and no longer need to own the scope lifecycle directly.
 - requirements.txt: Promote polars for analysis; keep pyarrow/duckdb as optional.
 
-Recommended next steps (incremental, low-risk)
-
-1) Centralize frame routing via the bus
-   - Hook services/sources.SourceManager into app startup (or into a small shared AppContext module) and let pages subscribe to core.bus.bus.frame_block.
-   - Keep the existing page-local SyntheticGenerator/Analyzer working until the bus path is validated; then remove duplication.
-
-2) Introduce a shared Processor interface
-   - Extract a thin processing/base.py that wraps RealTimeCDMS from geo_calibration and exposes process_block(x, fs) -> List[Ion].
-   - Add a small worker that subscribes to bus.frame_block, runs process_block, then emits bus.ions_batch. This way any page can visualize or record ions.
-
-3) Adopt PolarsHistogram in processing_page
-   - Replace the NumPy histogram path with processing/aggregators.PolarsHistogram. Keep bin count/bin width configurable in the UI.
-   - Provide a user toggle to switch field (mz vs mass) and range, and use Polars to recompute quickly.
-
-4) Clarify result/data types
-   - Move EventResult (cdms_page) to a shared core/types.py alongside a light IonView type (or reuse processing.Ion). This removes duplication and makes buses strongly typed at the edges.
-
-5) Throughput and backpressure
-   - If needed, add a small ring-buffer or a "latest only" policy for worker input to avoid backlog under bursty load.
-   - Consider making the processing worker use a QThreadPool (QRunnable) when parallelizing heavy routines in the future.
-
 Notes on Polars use
 
 - For light rates, NumPy remains fine. Polars starts to shine when ion counts become large or when downstream exports/queries are needed (e.g., cut-by-range, per-ion snapshots, parquet export).
