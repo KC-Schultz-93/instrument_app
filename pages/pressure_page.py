@@ -7,7 +7,7 @@ Purpose: UI page for pressures/interlocks: port controls, status pills, pump con
 How it fits:
 - Depends on: instrument_app.services.serial_manager.SerialManager
               instrument_app.services.data_recorder.DataRecorder
-              instrument_app.widgets.time_pressure_plot.TimePressurePlot
+              instrument_app.ui.plots.TimePressureView
               instrument_app.theme.style
 - Used by:    MainWindow (as a tab)
 

@@ -1,6 +1,6 @@
 
 """
-Module: instrument_app.widgets.time_pressure_plot
+Module: instrument_app.ui.plots
 Purpose: Reusable pyqtgraph plot widget for pressure vs. time (log-Y), with:
          - dynamic bottom axis (minutes↔hours),
          - crosshair + hover readout,
@@ -11,7 +11,7 @@ How it fits:
 - Used by:    PressureInterlockPage
 
 Public API:
-- class TimePressurePlot(QWidget): set_view("UHV"/"Foreline"),
+- class TimePressureView(QWidget): set_view("UHV"/"Foreline"),
                                    set_time_window("5 min"/.../"All"),
                                    append(Reading)
 
