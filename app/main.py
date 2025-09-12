@@ -16,6 +16,7 @@ from instrument_app.pages.processing_page import ProcessingPage
 from instrument_app.services.serial_manager import SerialManager
 from instrument_app.services.data_recorder import DataRecorder
 from instrument_app.services.ion_recorder import IonRecorder
+from instrument_app.services.event_snippet_recorder import EventSnippetRecorder
 from instrument_app.core.app_context import ctx
 
 from instrument_app.theme.manager import theme_mgr
@@ -43,6 +44,10 @@ class MainWindow(QMainWindow):
             self.ion_recorder = IonRecorder(Path.home() / "InstrumentLogs")
         except Exception:
             self.ion_recorder = None
+        try:
+            self.snippet_recorder = EventSnippetRecorder(Path.home() / "InstrumentLogs")
+        except Exception:
+            self.snippet_recorder = None
 
         # tabs
         self.tabs = QTabWidget()

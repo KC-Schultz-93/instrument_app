@@ -14,6 +14,7 @@ charge calibration hook) live here. GUI/device code must not leak into this modu
 
 from __future__ import annotations
 import json, math
+from time import perf_counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Dict
@@ -211,7 +212,10 @@ class RealTimeCDMS:
         if V == 0.0:
             raise ValueError("Trap voltage V is required (either pass V_volts or have voltage_median in JSON).")
 
+        t0 = perf_counter()
+        t_pick0 = perf_counter()
         peaks = _fft_peaks(x, self.fft_cfg)
+        t_pick1 = perf_counter()
         if not peaks:
             return []
 
@@ -219,9 +223,11 @@ class RealTimeCDMS:
         N = len(x)
         nfft = self.fft_cfg.nfft or int(2**math.ceil(math.log2(N)))
         w = get_window(self.fft_cfg.window, N, fftbins=True)
+        t_fft20 = perf_counter()
         X = np.fft.rfft(x * w, n=nfft)
         freqs = np.fft.rfftfreq(nfft, d=1.0/self.fft_cfg.fs)
         mag = np.abs(X)
+        t_fft21 = perf_counter()
         df = freqs[1] - freqs[0] if len(freqs) > 1 else self.fft_cfg.fs / nfft
 
         # Effective frequency resolution: ~1 bin by default, allow override
@@ -260,12 +266,17 @@ class RealTimeCDMS:
             return None
 
         results: List[IonResult] = []
+        harm_time = 0.0
+        calib_time = 0.0
+        charge_time = 0.0
         for i, p in enumerate(peaks):
+            th0 = perf_counter()
             a1 = near_amp(p.f_hz)
             a2 = near_amp(2*p.f_hz)
             a3 = near_amp(3*p.f_hz)
             r2 = (a2 / a1) if (a1 and a1 > 0 and a2 is not None) else None
             r3 = (a3 / a1) if (a1 and a1 > 0 and a3 is not None) else None
+            harm_time += (perf_counter() - th0)
 
             e_est: Optional[float] = None
             if have_harm_model:
@@ -287,18 +298,34 @@ class RealTimeCDMS:
             z_val: Optional[float] = None
             m_val: Optional[float] = None
             if quality == "ok":
+                tc0 = perf_counter()
                 Cval = float(self.calib.cpoly.C(np.array([E_val], dtype=float), V)[0])
                 mz_val = Cval / (p.f_hz ** 2)
+                calib_time += (perf_counter() - tc0)
                 if self.charge_cal is not None:
+                    tq0 = perf_counter()
                     q_coul = self.charge_cal(p.amp, p.f_hz)
                     z_val = q_coul / E_CHARGE
                     m_val = z_val * mz_val
+                    charge_time += (perf_counter() - tq0)
 
             results.append(IonResult(
                 f_hz=p.f_hz, amp=p.amp, E_ev_per_z=E_val, V_volts=V,
                 mz=mz_val, z=z_val, m_amu=m_val, quality=quality,
                 snr_db=snr_db, fwhm_hz=None, r2_over_r1=r2, r3_over_r1=r3,
             ))
+        t1 = perf_counter()
+        _emit_profile(
+            {
+                "fft_pick_ms": (t_pick1 - t_pick0) * 1000.0,
+                "fft2_ms": (t_fft21 - t_fft20) * 1000.0,
+                "harm_ms": harm_time * 1000.0,
+                "calib_ms": calib_time * 1000.0,
+                "charge_ms": charge_time * 1000.0,
+                "total_ms": (t1 - t0) * 1000.0,
+                "n_peaks": len(peaks),
+            }
+        )
         return results
 
 # ------------------ Public module-level API ------------------
@@ -440,6 +467,21 @@ def export_hist(state: HistState, path: str | Path) -> None:
         f.write("start,end,count\n")
         for i in range(len(state.counts)):
             f.write(f"{state.edges[i]},{state.edges[i+1]},{int(state.counts[i])}\n")
+
+# ------------------ Profiling hook ------------------
+_profile_cb: Optional[Callable[[Dict[str, float]], None]] = None
+
+def set_profile_callback(cb: Optional[Callable[[Dict[str, float]], None]]) -> None:
+    global _profile_cb
+    _profile_cb = cb
+
+def _emit_profile(d: Dict[str, float]) -> None:
+    cb = _profile_cb
+    if cb is not None:
+        try:
+            cb(d)
+        except Exception:
+            pass
 
 # ------------------ Calibration verification helpers ------------------
 

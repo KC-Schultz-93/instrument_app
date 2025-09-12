@@ -17,6 +17,11 @@ class AppContext:
     def __init__(self) -> None:
         # Source
         self.sources = SourceManager()
+        # route source status to bus
+        try:
+            self.sources.status.connect(bus.status)
+        except Exception:
+            pass
 
         # Processor in dedicated thread
         self.proc_thread = QThread()
@@ -29,4 +34,3 @@ class AppContext:
 
 # Module-level singleton
 ctx = AppContext()
-

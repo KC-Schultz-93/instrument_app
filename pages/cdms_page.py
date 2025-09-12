@@ -28,6 +28,7 @@ import pyqtgraph as pg
 # theming
 from instrument_app.ui import AODOPanel, AcquisitionPanel, PillLabel
 from instrument_app.theme.manager import theme_mgr
+from instrument_app.core.bus import bus
 
 
 # ----------------------------- Optional Pico (safe import) -----------------------------
@@ -155,6 +156,12 @@ class CDMSPage(QWidget):
 
         # Right side: table + histogram
         right = QVBoxLayout(); right.setSpacing(8)
+        # Scope health row
+        health = QHBoxLayout(); health.setSpacing(8)
+        self.lbl_scope = PillLabel("Scope: --", bg_role=lambda t: t.GRAY, fg_role=lambda t: t.TXT)
+        self.lbl_scope_details = QLabel("fs: --, N: --, rms: --, dc: --")
+        health.addWidget(self.lbl_scope); health.addWidget(self.lbl_scope_details, 1)
+        right.addLayout(health)
         self.table = self._build_table()
         self.hist_plot = self._build_hist_plot()
         split = QSplitter(Qt.Vertical); split.addWidget(self.table); split.addWidget(self.hist_plot); split.setSizes([400, 300])
@@ -206,6 +213,13 @@ class CDMSPage(QWidget):
         self.acq.start_clicked.connect(self._start_clicked)
         self.acq.stop_clicked.connect(self._stop_clicked)
         self._on_source_changed(self.acq.source())
+
+        # Subscribe to bus for scope health
+        try:
+            bus.metrics.connect(self._on_metrics)
+            bus.status.connect(self._on_status)
+        except Exception:
+            pass
 
     # ---------------------- builders ----------------------
 
@@ -328,6 +342,42 @@ class CDMSPage(QWidget):
         rate = (self._events_seen - self._last_n) / dt
         self.lbl_rate.setText(f"Rate: {rate:,.1f} evt/s")
         self._t0 = now; self._last_n = self._events_seen
+
+    def _on_status(self, s: str):
+        if s.lower().startswith("pico" ):
+            # Show last Pico status/errors
+            self.lbl_scope_details.setText(f"{self.lbl_scope_details.text()} | {s}")
+
+    def _on_metrics(self, d: object):
+        try:
+            info = dict(d)
+        except Exception:
+            return
+        if not info.get("scope", False):
+            return
+        ev = info.get("event")
+        if ev == "connected":
+            self.lbl_scope.setText("Scope: Connected")
+            self.lbl_scope.set_roles(bg_role=lambda t: t.GOOD)
+        elif ev == "disconnected":
+            self.lbl_scope.setText("Scope: Disconnected")
+            self.lbl_scope.set_roles(bg_role=lambda t: t.BAD)
+        elif ev in ("configured", "frame"):
+            fs = info.get("fs_hz")
+            n_req = info.get("n_req", info.get("n_samples"))
+            n_got = info.get("n_got", n_req)
+            rms = info.get("rms_v")
+            dc = info.get("dc_v")
+            clip = info.get("clip")
+            overflow = info.get("overflow")
+            ok = (n_req == n_got) and not clip and not overflow
+            self.lbl_scope.setText("Scope: OK" if ok else "Scope: Error")
+            self.lbl_scope.set_roles(bg_role=(lambda t: t.GOOD) if ok else (lambda t: t.BAD))
+            self.lbl_scope_details.setText(
+                f"fs: {fs:,.0f} Hz, N: {n_got}/{n_req}, rms: {rms:.3f} V, dc: {dc:.3f} V"
+                if isinstance(fs, (int, float)) and isinstance(n_got, (int, float)) and isinstance(n_req, (int, float)) and isinstance(rms, (int, float)) and isinstance(dc, (int, float))
+                else self.lbl_scope_details.text()
+            )
 
     def _refresh_hist(self):
         if not self._f0_hist_vals:

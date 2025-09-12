@@ -148,6 +148,10 @@ class ProcessingPage(QWidget):
                 pass
         # push to central processor
         ctx.processor.set_calibration(calib)
+        try:
+            ctx.processor.set_calibration_source(str(path))
+        except Exception:
+            pass
 
     def _start(self):
         if self._calib is None:

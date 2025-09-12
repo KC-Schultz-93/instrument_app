@@ -49,6 +49,7 @@ class PicoScopeService(QObject):
     """
     block_ready = pyqtSignal(object, float)
     status = pyqtSignal(str)
+    scope_status = pyqtSignal(object)
 
     def __init__(
         self,
@@ -78,6 +79,7 @@ class PicoScopeService(QObject):
 
         # cached max ADC value (device-specific)
         self._max_adc = c_int16(32767)
+        self._name = "Pico4000A"
 
     # --------------------- Public Slots --------------------- #
 
@@ -96,6 +98,21 @@ class PicoScopeService(QObject):
             timebase = self._choose_timebase(self._fs, self._N)
             pre = int(self._N * self._pre_frac)
             post = self._N - pre
+
+            # Emit configuration snapshot
+            try:
+                self.scope_status.emit({
+                    "scope": True,
+                    "name": self._name,
+                    "event": "configured",
+                    "fs_hz": self._fs,
+                    "n_samples": self._N,
+                    "pre": pre,
+                    "post": post,
+                    "trigger_v": self._trig_v,
+                })
+            except Exception:
+                pass
 
             # One reusable buffer on the selected channel
             buf = (c_int16 * self._N)()
@@ -141,6 +158,30 @@ class PicoScopeService(QObject):
                 data = np.frombuffer(buf, dtype=np.int16, count=int(n_captured.value)).copy()
                 # Emit to analyzer
                 self.block_ready.emit(data, self._fs)
+                # Emit per-frame sanity metrics
+                try:
+                    n_req = int(self._N)
+                    n_got = int(n_captured.value)
+                    overflowed = bool(overflow.value)
+                    max_adc = int(self._max_adc.value)
+                    dc_counts = float(np.mean(data, dtype=np.float64))
+                    rms_counts = float(np.sqrt(np.mean((data.astype(np.float64))**2)))
+                    clip = bool(np.any((data >= max_adc) | (data <= -max_adc)))
+                    scale = (self._vr_fs_volts / max(1, max_adc))
+                    self.scope_status.emit({
+                        "scope": True,
+                        "name": self._name,
+                        "event": "frame",
+                        "fs_hz": self._fs,
+                        "n_req": n_req,
+                        "n_got": n_got,
+                        "overflow": overflowed,
+                        "dc_v": dc_counts * scale,
+                        "rms_v": rms_counts * scale,
+                        "clip": clip,
+                    })
+                except Exception:
+                    pass
 
                 # Stop the scope (required between blocks)
                 ps.ps4000aStop(self._h)
@@ -175,6 +216,10 @@ class PicoScopeService(QObject):
         assert_pico_ok(status)
         self._open = True
         self.status.emit("Pico: device opened")
+        try:
+            self.scope_status.emit({"scope": True, "name": self._name, "event": "connected"})
+        except Exception:
+            pass
 
     def _configure_channel(self):
         status = ps.ps4000aSetChannel(
@@ -243,6 +288,10 @@ class PicoScopeService(QObject):
                     pass
                 ps.ps4000aCloseUnit(self._h)
                 self.status.emit("Pico: device closed")
+                try:
+                    self.scope_status.emit({"scope": True, "name": self._name, "event": "disconnected"})
+                except Exception:
+                    pass
         finally:
             self._open = False
 

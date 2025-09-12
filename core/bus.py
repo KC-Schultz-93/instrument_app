@@ -38,6 +38,7 @@ class SignalBus(QObject):
     ions_batch = pyqtSignal(object)
     status = pyqtSignal(str)
     metrics = pyqtSignal(object)  # dict with lightweight metrics
+    event_snippet = pyqtSignal(object)  # dict with event meta and short raw snippet
 
 
 # Module-level singleton

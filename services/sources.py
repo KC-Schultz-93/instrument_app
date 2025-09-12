@@ -64,6 +64,11 @@ class PicoSource(QObject):
         self._svc = PicoScopeService()
         self._svc.block_ready.connect(self._on_block)
         self._svc.status.connect(self.status)
+        # Route scope status/metrics to bus
+        try:
+            self._svc.scope_status.connect(lambda d: bus.metrics.emit(d))
+        except Exception:
+            pass
 
     @pyqtSlot()
     def start_rapid(self):
@@ -143,4 +148,3 @@ class SourceManager(QObject):
             self._thr.quit(); self._thr.wait()
         self._thr = None; self._src = None
         self.status.emit("Source: stopped")
-
