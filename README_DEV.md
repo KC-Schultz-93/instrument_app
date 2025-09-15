@@ -44,9 +44,8 @@ Widgets that need to respond to theme changes should inherit from
 subscribes to `theme_mgr.themeChanged` and calls `apply_theme` whenever the
 user switches themes.
 
-Note: The legacy package `instrument_app.widgets` is deprecated. Use
-`instrument_app.ui` for all reusable UI components. A temporary shim remains to
-ease migration, but it may be removed in a future release.
+Note: The legacy package `instrument_app.widgets` has been removed. Use
+`instrument_app.ui` for all reusable UI components going forward.
 
 ## Adding a new card or panel
 
