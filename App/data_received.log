@@ -1,0 +1,40 @@
+Data received: {'timestamp_ms': 47245, 'uhv_torr': 0.0, 'fore_torr': 13.274824, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 1, fore: 1, uhv: 1
+Data received: {'timestamp_ms': 1148250, 'uhv_torr': 0.0, 'fore_torr': 13.309075, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 2, fore: 2, uhv: 2
+Data received: {'timestamp_ms': 1012, 'uhv_torr': 0.0, 'fore_torr': 12.99658, 'state': 'WARMUP', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 3, fore: 3, uhv: 3
+Data received: {'timestamp_ms': 2017, 'uhv_torr': 0.0, 'fore_torr': 12.951795, 'state': 'WARMUP', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 4, fore: 4, uhv: 4
+Data received: {'timestamp_ms': 3021, 'uhv_torr': 0.0, 'fore_torr': 12.948298, 'state': 'WARMUP', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 5, fore: 5, uhv: 5
+Data received: {'timestamp_ms': 4026, 'uhv_torr': 0.0, 'fore_torr': 13.008374, 'state': 'WARMUP', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 6, fore: 6, uhv: 6
+Data received: {'timestamp_ms': 5030, 'uhv_torr': 0.0, 'fore_torr': 12.95434, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 7, fore: 7, uhv: 7
+Data received: {'timestamp_ms': 6035, 'uhv_torr': 0.0, 'fore_torr': 12.804109, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 8, fore: 8, uhv: 8
+Data received: {'timestamp_ms': 7040, 'uhv_torr': 0.0, 'fore_torr': 12.928056, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 9, fore: 9, uhv: 9
+Data received: {'timestamp_ms': 8044, 'uhv_torr': 0.0, 'fore_torr': 12.9537, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 10, fore: 10, uhv: 10
+Data received: {'timestamp_ms': 9049, 'uhv_torr': 0.0, 'fore_torr': 12.950913, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 11, fore: 11, uhv: 11
+Data received: {'timestamp_ms': 10053, 'uhv_torr': 0.0, 'fore_torr': 12.954895, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 12, fore: 12, uhv: 12
+Data received: {'timestamp_ms': 11058, 'uhv_torr': 0.0, 'fore_torr': 12.885046, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 13, fore: 13, uhv: 13
+Data received: {'timestamp_ms': 12062, 'uhv_torr': 0.0, 'fore_torr': 12.9482, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 14, fore: 14, uhv: 14
+Data received: {'timestamp_ms': 13067, 'uhv_torr': 0.0, 'fore_torr': 12.777132, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 15, fore: 15, uhv: 15
+Data received: {'timestamp_ms': 14071, 'uhv_torr': 0.0, 'fore_torr': 12.809777, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 16, fore: 16, uhv: 16
+Data received: {'timestamp_ms': 15076, 'uhv_torr': 0.0, 'fore_torr': 12.97354, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 17, fore: 17, uhv: 17
+Data received: {'timestamp_ms': 16080, 'uhv_torr': 0.0, 'fore_torr': 12.89971, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 18, fore: 18, uhv: 18
+Data received: {'timestamp_ms': 17085, 'uhv_torr': 0.0, 'fore_torr': 12.919454, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 19, fore: 19, uhv: 19
+Data received: {'timestamp_ms': 18089, 'uhv_torr': 0.0, 'fore_torr': 12.74331, 'state': 'IDLE', 'tg60_ok': 'NO', 'tg220_ok': 'NO', 'fault': 0, 'maint': 0}
+Buffer sizes - time: 20, fore: 20, uhv: 20
