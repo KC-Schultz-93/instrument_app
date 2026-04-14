@@ -1,0 +1,176 @@
+"""
+AcquisitionWorker.py
+--------------------
+QThread worker that runs the continuous block-mode acquisition loop.
+
+The worker owns the acquisition loop and is the only caller of
+PicoScopeService.run_block(). All results are returned to the main thread
+via Qt signals (QueuedConnection is the automatic default for cross-thread
+signal delivery in PyQt5).
+
+Lifecycle:
+    worker = AcquisitionWorker(service, config, logger, run_id)
+    worker.waveform_ready.connect(page._on_waveform_received)
+    worker.error_occurred.connect(page._on_daq_error)
+    worker.start()                  # launches run()
+    ...
+    worker.request_stop()           # call from main thread
+    worker.wait(timeout_ms=5000)    # join; then safe to call logger.close()
+
+Analysis pipeline (per trace):
+    run_block → save_raw → estimate_baseline → subtract_baseline →
+    find_peaks → classify → build EventSummary → save_event_summary →
+    emit signals
+"""
+
+from __future__ import annotations
+
+from PyQt5.QtCore import QThread, pyqtSignal
+
+from Services.DAQLogger import DAQLogger
+from Services.DAQModels import AcquisitionConfig, EventSummary, WaveformRecord
+from Services.EventDetector import EventDetector
+from Services.PicoScopeService import PicoScopeService
+from Services.SignalExtractor import SignalExtractor
+from Services.WaveformProcessor import WaveformProcessor
+
+
+class AcquisitionWorker(QThread):
+    """
+    Runs the continuous block-mode acquisition loop on a worker thread.
+
+    Parameters
+    ----------
+    service : PicoScopeService
+        Already-connected PicoScope service.
+    config : AcquisitionConfig
+        Acquisition parameters for this run.
+    logger : DAQLogger
+        Open DAQ logger for file output.
+    run_id : str
+        Run identifier string (stamped onto every WaveformRecord and EventSummary).
+    """
+
+    # Signals — delivered to the main thread's event loop automatically
+    waveform_ready = pyqtSignal(object)     # WaveformRecord
+    event_ready = pyqtSignal(object)        # EventSummary
+    error_occurred = pyqtSignal(str)
+    status_update = pyqtSignal(str)
+    trace_count_changed = pyqtSignal(int)   # total traces acquired so far
+
+    def __init__(
+        self,
+        service: PicoScopeService,
+        config: AcquisitionConfig,
+        logger: DAQLogger,
+        run_id: str,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._service = service
+        self._config = config
+        self._logger = logger
+        self._run_id = run_id
+        self._stop_flag: bool = False
+        self._trace_id: int = 0
+
+        # Analysis objects — instantiated once and reused across traces
+        self._extractor = SignalExtractor()
+        self._detector = EventDetector()
+
+    # ------------------------------------------------------------------
+    # Control (call from main thread)
+    # ------------------------------------------------------------------
+
+    def request_stop(self) -> None:
+        """
+        Signal the worker to stop after the current trace completes.
+        Thread-safe for a single bool assignment in CPython.
+        """
+        self._stop_flag = True
+
+    # ------------------------------------------------------------------
+    # Worker loop
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        """Acquisition loop — runs entirely on the worker thread."""
+        self.status_update.emit("Acquisition started.")
+        self._logger.log("Acquisition loop started.")
+
+        while not self._stop_flag:
+            try:
+                record = self._service.run_block(self._config)
+                self._trace_id += 1
+                record.trace_id = self._trace_id
+                record.run_id = self._run_id
+
+                # Save raw waveform
+                self._logger.save_raw(record)
+
+                # Analysis pipeline
+                summary = self._analyse(record)
+                self._logger.save_event_summary(summary)
+
+                # Emit results to main thread
+                self.waveform_ready.emit(record)
+                self.event_ready.emit(summary)
+                self.trace_count_changed.emit(self._trace_id)
+
+            except Exception as exc:
+                self._logger.log(f"Acquisition error: {exc}", level="error")
+                self.error_occurred.emit(str(exc))
+                break
+
+        self._logger.log(
+            f"Acquisition loop stopped. Total traces: {self._trace_id}"
+        )
+        self.status_update.emit(
+            f"Acquisition stopped. Traces acquired: {self._trace_id}"
+        )
+
+    # ------------------------------------------------------------------
+    # Analysis pipeline (runs on worker thread)
+    # ------------------------------------------------------------------
+
+    def _analyse(self, record: WaveformRecord) -> EventSummary:
+        """
+        Run baseline correction, peak finding, and classification for one trace.
+        Returns an EventSummary ready to be saved and emitted.
+        """
+        voltage = record.voltage
+
+        # Baseline estimation and correction
+        try:
+            baseline_mean, baseline_rms = WaveformProcessor.estimate_baseline(voltage)
+        except ValueError:
+            baseline_mean, baseline_rms = 0.0, 0.0
+        corrected = WaveformProcessor.subtract_baseline(voltage, baseline_mean)
+
+        # Peak finding (operate on baseline-corrected signal)
+        peaks = self._extractor.find_peaks(
+            corrected, baseline_mean, baseline_rms, record.time_ns
+        )
+
+        # Classification
+        classification, accepted = self._detector.classify(
+            record, peaks, baseline_mean, baseline_rms
+        )
+
+        # Summary statistics
+        stats = self._extractor.summarize(peaks, baseline_mean, baseline_rms)
+
+        return EventSummary(
+            trace_id=record.trace_id,
+            run_id=record.run_id,
+            timestamp=record.timestamp,
+            accepted=accepted,
+            classification=classification,
+            baseline_mean_v=baseline_mean,
+            baseline_rms_v=baseline_rms,
+            signal_max_v=float(voltage.max()),
+            signal_min_v=float(voltage.min()),
+            num_peaks=stats["num_peaks"],
+            mean_peak_height_v=stats.get("mean_peak_height_v"),
+            mean_peak_spacing_ns=stats.get("mean_peak_spacing_ns"),
+        )

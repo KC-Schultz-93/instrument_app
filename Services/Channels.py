@@ -6,11 +6,21 @@ from PyQt5.QtCore import QObject, pyqtSignal
 ###############################################################################
 
 class AppChannels(QObject):
+    # --- Serial / pressure signals (existing) ---
     log = pyqtSignal(str)
     error = pyqtSignal(str)
     connection_changed = pyqtSignal(bool, str)
     data_received = pyqtSignal(dict)
     command_sent = pyqtSignal(str)
+
+    # --- DAQ signals ---
+    daq_status = pyqtSignal(str)            # human-readable status messages
+    daq_error = pyqtSignal(str)             # error string from DAQ subsystem
+    daq_connected = pyqtSignal(bool)        # True = connected, False = disconnected
+    daq_waveform = pyqtSignal(object)       # emits WaveformRecord
+    daq_event_summary = pyqtSignal(object)  # emits EventSummary
+    daq_run_started = pyqtSignal(str)       # run_id
+    daq_run_stopped = pyqtSignal(str, int)  # run_id, total_traces
 
     def __init__(self, parent=None):
         super().__init__(parent)

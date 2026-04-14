@@ -5,10 +5,11 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
 from PyQt5.QtGui import QPalette, QColor
 
 from Pages.pressure_page import PressurePage
+from Pages.daq_page import DAQPage
 from Services.Channels import AppChannels
 from UI.theme import theme_mgr
 
@@ -37,9 +38,15 @@ class MainWindow(QMainWindow):
 
         tabs = QTabWidget()
         self.pressure_page = PressurePage(self.channels)
+        self.daq_page = DAQPage(self.channels)
         tabs.addTab(self.pressure_page, "Pressures / Interlocks")
-        tabs.addTab(QWidget(), "CDMS")
+        tabs.addTab(self.daq_page, "CDMS")
         self.setCentralWidget(tabs)
+
+    def closeEvent(self, event) -> None:
+        """Ensure the DAQ worker thread is stopped cleanly before exit."""
+        self.daq_page.stop_acquisition()
+        super().closeEvent(event)
 
 
 def main():
