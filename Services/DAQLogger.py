@@ -31,9 +31,9 @@ import logging
 import numpy as np
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from Services.DAQModels import EventSummary, WaveformRecord
+from Services.DAQModels import EventSummary, STFTResult, WaveformRecord
 
 
 # CSV column order for the reduced events file
@@ -51,6 +51,10 @@ _CSV_FIELDS = [
     "mean_peak_height_v",
     "mean_peak_spacing_ns",
     "notes",
+    "oscillation_freq_hz",
+    "charge_e",
+    "mz_Da_per_e",
+    "mass_Da",
 ]
 
 
@@ -95,16 +99,22 @@ class DAQLogger:
         """Return the standard DAQ output root relative to the repo root."""
         return Path(__file__).parent.parent / "Recorded Data" / "DAQ"
 
-    def save_raw(self, record: WaveformRecord) -> None:
+    def save_raw(
+        self,
+        record: WaveformRecord,
+        stft: Optional[STFTResult] = None,
+    ) -> None:
         """
         Save one WaveformRecord as a compressed .npz file.
 
         Saved arrays:
-            voltage   — float64, volts
-            time_ns   — float64, nanoseconds
-            meta      — 1-element object array containing a JSON string with
-                        trace_id, run_id, timestamp, sample_interval_ns,
-                        and the full acquisition config dict.
+            voltage          — float64, volts
+            time_ns          — float64, nanoseconds
+            meta             — 1-element object array, JSON string with metadata
+            stft_times_s     — float64, STFT window centers (seconds), if provided
+            stft_freqs_hz    — float64, STFT frequency bins (Hz), if provided
+            stft_power_db    — float64 2-D (F×T), STFT magnitude (dBV), if provided
+            stft_dominant_hz — float64, per-window dominant frequency, if provided
         """
         filename = self._raw_dir / f"trace_{record.trace_id:06d}.npz"
 
@@ -118,12 +128,18 @@ class DAQLogger:
         }
         meta_arr = np.array([json.dumps(meta_dict)], dtype=object)
 
-        np.savez_compressed(
-            filename,
-            voltage=record.voltage,
-            time_ns=record.time_ns,
-            meta=meta_arr,
-        )
+        arrays: dict = {
+            "voltage": record.voltage,
+            "time_ns": record.time_ns,
+            "meta": meta_arr,
+        }
+        if stft is not None:
+            arrays["stft_times_s"] = stft.times_s
+            arrays["stft_freqs_hz"] = stft.frequencies_hz
+            arrays["stft_power_db"] = stft.power_db
+            arrays["stft_dominant_hz"] = stft.dominant_freq_track_hz
+
+        np.savez_compressed(filename, **arrays)
 
     def save_event_summary(self, summary: EventSummary) -> None:
         """Append one row to the reduced events CSV."""
@@ -143,9 +159,43 @@ class DAQLogger:
             "mean_peak_height_v": summary.mean_peak_height_v,
             "mean_peak_spacing_ns": summary.mean_peak_spacing_ns,
             "notes": summary.notes,
+            "oscillation_freq_hz": summary.oscillation_freq_hz,
+            "charge_e": summary.charge_e,
+            "mz_Da_per_e": summary.mz_Da_per_e,
+            "mass_Da": summary.mass_Da,
         }
         self._csv_writer.writerow(row)
         self._csv_file.flush()
+
+    def save_mass_histogram(self, masses_Da: List[float]) -> None:
+        """
+        Write a mass histogram JSON file for the completed run.
+
+        The file is written to ``reduced/<run_id>_mass_histogram.json``.
+        If no accepted traces produced a mass estimate, the file is still written
+        with zero counts so downstream tools can detect an empty run cleanly.
+
+        Parameters
+        ----------
+        masses_Da : list of float
+            Mass values (in Daltons) from accepted traces that had a valid m/z.
+        """
+        hist_path = self._reduced_path.parent / f"{self.run_id}_mass_histogram.json"
+
+        if len(masses_Da) >= 2:
+            counts, bin_edges = np.histogram(masses_Da, bins="auto")
+        else:
+            counts = np.array([], dtype=int)
+            bin_edges = np.array([], dtype=float)
+
+        payload = {
+            "unit": "Da",
+            "n_accepted": len(masses_Da),
+            "bin_edges": bin_edges.tolist(),
+            "counts": counts.tolist(),
+        }
+        with open(hist_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
 
     def write_metadata(self, meta: dict) -> None:
         """Write (or overwrite) the run metadata JSON file."""

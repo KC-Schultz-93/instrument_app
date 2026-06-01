@@ -72,6 +72,45 @@ class PeakRecord:
 # ---------------------------------------------------------------------------
 
 @dataclass
+class FFTResult:
+    """Frequency-domain representation of one waveform trace."""
+
+    frequencies_hz: np.ndarray      # shape (N//2 + 1,)
+    magnitudes_db: np.ndarray       # amplitude spectrum in dBV, same shape
+    dominant_freq_hz: float         # largest non-DC peak frequency
+    dominant_mag_db: float          # magnitude at dominant peak
+
+
+@dataclass
+class CDMSConfig:
+    """CDMS physics calibration parameters, configurable per run."""
+
+    charge_cal_uv_per_e: float = 0.64   # μV of signal per elementary charge (CoolFET)
+    trap_k_Da_Hz2: float = 0.0          # m/z = K / f²; 0 means uncalibrated (disabled)
+    stft_nperseg: int = 512             # STFT window size in samples
+
+
+@dataclass
+class STFTResult:
+    """Short-Time Fourier Transform output for one waveform trace."""
+
+    times_s: np.ndarray              # shape (T,) — window center times in seconds
+    frequencies_hz: np.ndarray       # shape (F,) — frequency bins in Hz
+    power_db: np.ndarray             # shape (F, T) — magnitude spectrum in dBV
+    dominant_freq_track_hz: np.ndarray  # shape (T,) — per-window dominant frequency
+
+
+@dataclass
+class CDMSResult:
+    """Per-trace CDMS physics result derived from FFT and signal amplitude."""
+
+    oscillation_freq_hz: float
+    charge_e: float
+    mz_Da_per_e: Optional[float]    # None when K_trap is uncalibrated
+    mass_Da: Optional[float]        # None when K_trap is uncalibrated
+
+
+@dataclass
 class EventSummary:
     """
     Reduced feature summary for one processed trace.
@@ -93,3 +132,9 @@ class EventSummary:
     mean_peak_height_v: Optional[float] = None
     mean_peak_spacing_ns: Optional[float] = None
     notes: str = ""
+
+    # CDMS physics — populated when CDMSAnalyzer runs
+    oscillation_freq_hz: Optional[float] = None
+    charge_e: Optional[float] = None
+    mz_Da_per_e: Optional[float] = None
+    mass_Da: Optional[float] = None

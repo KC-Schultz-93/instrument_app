@@ -140,6 +140,61 @@ def test_short_trace_raises():
         print("  short trace ValueError:  PASS")
 
 
+def test_stft_shape():
+    """STFT output arrays should have consistent shapes."""
+    sample_interval_ns = 100  # 10 MHz sample rate
+    n = 2048
+    time_ns = np.arange(n) * sample_interval_ns
+    voltage = np.zeros(n)
+
+    result = WaveformProcessor.compute_stft(voltage, sample_interval_ns, nperseg=256)
+
+    F = len(result.frequencies_hz)
+    T = len(result.times_s)
+    assert result.power_db.shape == (F, T), (
+        f"power_db shape {result.power_db.shape} != ({F}, {T})"
+    )
+    assert result.dominant_freq_track_hz.shape == (T,), (
+        f"dominant_freq_track shape {result.dominant_freq_track_hz.shape} != ({T},)"
+    )
+    print(f"  stft_shape:  power_db {result.power_db.shape}  - PASS")
+
+
+def test_stft_dominant_frequency():
+    """STFT dominant frequency track should identify a known injected sine frequency.
+
+    Tolerance is 30% because the STFT bin width at 10 MHz / 512 samples is ~19.5 kHz.
+    The test verifies that the dominant-bin selection logic is working, not sub-bin
+    interpolation accuracy.
+    """
+    sample_interval_ns = 100  # 10 MHz sample rate
+    fs = 1.0 / (sample_interval_ns * 1e-9)
+    n = 4096
+    t_s = np.arange(n) / fs
+    target_freq_hz = 50_000.0  # 50 kHz injected tone
+    voltage = 0.1 * np.sin(2 * np.pi * target_freq_hz * t_s)
+
+    result = WaveformProcessor.compute_stft(voltage, sample_interval_ns, nperseg=512)
+
+    mean_dom_hz = float(result.dominant_freq_track_hz.mean())
+    rel_error = abs(mean_dom_hz - target_freq_hz) / target_freq_hz
+    assert rel_error < 0.30, (
+        f"STFT dominant freq {mean_dom_hz:.0f} Hz, expected ~{target_freq_hz:.0f} Hz "
+        f"(error {rel_error:.1%}) — exceeds STFT bin-width tolerance"
+    )
+    print(
+        f"  stft_dominant_freq:  {mean_dom_hz:.0f} Hz  (target {target_freq_hz:.0f} Hz, "
+        f"bin-width error {rel_error:.1%})  - PASS"
+    )
+
+
+def test_stft_short_trace_returns_gracefully():
+    """compute_stft on a very short trace should not raise."""
+    result = WaveformProcessor.compute_stft(np.array([0.1, 0.2]), 100, nperseg=512)
+    assert result.power_db.size > 0
+    print("  stft_short_trace:  PASS")
+
+
 if __name__ == "__main__":
     print("WaveformProcessor tests (no hardware required)")
     print("=" * 50)
@@ -152,5 +207,8 @@ if __name__ == "__main__":
     test_no_clipping_normal()
     test_noise_rms()
     test_short_trace_raises()
+    test_stft_shape()
+    test_stft_dominant_frequency()
+    test_stft_short_trace_returns_gracefully()
     print()
     print("All WaveformProcessor tests passed.")

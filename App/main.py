@@ -31,7 +31,7 @@ def apply_theme(app, theme):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Vacuum System Control")
+        self.setWindowTitle("Nano Instrument System Control")
         self.resize(1400, 800)
 
         self.channels = AppChannels()

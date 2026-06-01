@@ -124,6 +124,9 @@ class LogPressureAxisItem(pg.AxisItem):
         return result if result else super().tickValues(minVal, maxVal, size)
 
 
+_DEMO_PORT_LABEL = "--- TEST MODE (Simulated) ---"
+
+
 class PressurePage(QWidget):
     def __init__(self, channels=None, parent=None):
         super().__init__(parent)
@@ -131,6 +134,11 @@ class PressurePage(QWidget):
         self.serial = ArduinoSerialComms(self.channels)
 
         self.connected = False
+
+        self._demo_mode = False
+        self._demo_tick_count = 0
+        self._demo_timer = QTimer(self)
+        self._demo_timer.timeout.connect(self._demo_tick)
 
         self.time_data = deque(maxlen=43200)
         self.foreline_data = deque(maxlen=43200)
@@ -455,6 +463,7 @@ class PressurePage(QWidget):
 
     def refresh_ports(self):
         self.port_combo.clear()
+        self.port_combo.addItem(_DEMO_PORT_LABEL)
         for port in self.serial.refresh_ports():
             self.port_combo.addItem(port)
 
@@ -611,11 +620,75 @@ class PressurePage(QWidget):
         if not port_text:
             self.status_label.setText("No port selected")
             return
+        if port_text == _DEMO_PORT_LABEL:
+            self._start_demo_mode()
+            return
         port_name = port_text.split(' ')[0]
         self.serial.open_port(port_name)
 
     def disconnect_serial(self):
-        self.serial.close_port()
+        if self._demo_mode:
+            self._stop_demo_mode()
+        else:
+            self.serial.close_port()
+
+    def _start_demo_mode(self):
+        self._demo_mode = True
+        self._demo_tick_count = 0
+        self._prepopulate_demo_data()
+        self.channels.connection_changed.emit(True, _DEMO_PORT_LABEL)
+        self._demo_timer.start(1000)
+
+    def _stop_demo_mode(self):
+        self._demo_timer.stop()
+        self._demo_mode = False
+        self.channels.connection_changed.emit(False, "")
+
+    def _prepopulate_demo_data(self):
+        """Fill deques with 3 hours of simulated pressure history so trend lines appear immediately."""
+        rng = np.random.default_rng(42)
+        now = time.time()
+        num_points = 1080  # 3 h at 10-second intervals
+
+        for i in range(num_points):
+            t = now - (num_points - i) * 10
+            phase = i / num_points * 2 * np.pi
+
+            fore = 0.8 + 0.015 * np.sin(phase) + rng.normal(0, 0.004)
+            uhv = 5e-9 * (1.0 + 0.08 * np.sin(phase * 0.7) + rng.normal(0, 0.025))
+            uhv = max(uhv, 1e-12)
+
+            self.time_data.append(t)
+            self.foreline_data.append(fore)
+            self.uhv_data.append(uhv)
+
+        self.start_time = datetime.fromtimestamp(now - num_points * 10)
+
+    def _demo_tick(self):
+        """Emit one simulated data point each second."""
+        self._demo_tick_count += 1
+        phase = (self._demo_tick_count / 60.0) * 2 * np.pi
+
+        fore = 0.8 + 0.015 * np.sin(phase) + np.random.normal(0, 0.004)
+        uhv = 5e-9 * (1.0 + 0.08 * np.sin(phase * 0.7) + np.random.normal(0, 0.025))
+        uhv = max(uhv, 1e-12)
+
+        data = {
+            "timestamp_ms": self._demo_tick_count * 1000,
+            "uhv_torr": uhv,
+            "fore_torr": fore,
+            "state": "RUN",
+            "tg60_ok": "OK",
+            "tg220_ok": "OK",
+            "rel_tg60": 1,
+            "rel_tg220": 1,
+            "rel_hornet": 1,
+            "rel_test": 0,
+            "fault_hornet": 0,
+            "fault_system": 0,
+            "maint": 0,
+        }
+        self.channels.data_received.emit(data)
 
     def _on_connection_changed(self, connected, port_name):
         self.connected = connected
@@ -910,6 +983,8 @@ class PressurePage(QWidget):
         self.maintenance_dialog.activateWindow()
 
     def closeEvent(self, event):
+        if self._demo_mode:
+            self._stop_demo_mode()
         if self.connected:
             self.serial.close_port()
         if self.maintenance_dialog is not None:

@@ -9,8 +9,9 @@ via Qt signals (QueuedConnection is the automatic default for cross-thread
 signal delivery in PyQt5).
 
 Lifecycle:
-    worker = AcquisitionWorker(service, config, logger, run_id)
+    worker = AcquisitionWorker(service, config, cdms_config, logger, run_id)
     worker.waveform_ready.connect(page._on_waveform_received)
+    worker.cdms_ready.connect(page._on_cdms_received)
     worker.error_occurred.connect(page._on_daq_error)
     worker.start()                  # launches run()
     ...
@@ -18,17 +19,30 @@ Lifecycle:
     worker.wait(timeout_ms=5000)    # join; then safe to call logger.close()
 
 Analysis pipeline (per trace):
-    run_block → save_raw → estimate_baseline → subtract_baseline →
-    find_peaks → classify → build EventSummary → save_event_summary →
-    emit signals
+    run_block → save_raw(+STFT) → estimate_baseline → subtract_baseline →
+    find_peaks → classify → FFT → STFT → CDMSAnalyzer →
+    build EventSummary → save_event_summary → emit signals
+
+After loop exits:
+    save_mass_histogram → emit status_update
 """
 
 from __future__ import annotations
 
+from typing import List, Tuple
+
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from Services.CDMSAnalyzer import CDMSAnalyzer
 from Services.DAQLogger import DAQLogger
-from Services.DAQModels import AcquisitionConfig, EventSummary, WaveformRecord
+from Services.DAQModels import (
+    AcquisitionConfig,
+    CDMSConfig,
+    CDMSResult,
+    EventSummary,
+    STFTResult,
+    WaveformRecord,
+)
 from Services.EventDetector import EventDetector
 from Services.PicoScopeService import PicoScopeService
 from Services.SignalExtractor import SignalExtractor
@@ -45,6 +59,8 @@ class AcquisitionWorker(QThread):
         Already-connected PicoScope service.
     config : AcquisitionConfig
         Acquisition parameters for this run.
+    cdms_config : CDMSConfig
+        CDMS physics calibration parameters for this run.
     logger : DAQLogger
         Open DAQ logger for file output.
     run_id : str
@@ -54,6 +70,8 @@ class AcquisitionWorker(QThread):
     # Signals — delivered to the main thread's event loop automatically
     waveform_ready = pyqtSignal(object)     # WaveformRecord
     event_ready = pyqtSignal(object)        # EventSummary
+    cdms_ready = pyqtSignal(object)         # CDMSResult
+    stft_ready = pyqtSignal(object)         # STFTResult
     error_occurred = pyqtSignal(str)
     status_update = pyqtSignal(str)
     trace_count_changed = pyqtSignal(int)   # total traces acquired so far
@@ -62,6 +80,7 @@ class AcquisitionWorker(QThread):
         self,
         service: PicoScopeService,
         config: AcquisitionConfig,
+        cdms_config: CDMSConfig,
         logger: DAQLogger,
         run_id: str,
         parent=None,
@@ -77,6 +96,8 @@ class AcquisitionWorker(QThread):
         # Analysis objects — instantiated once and reused across traces
         self._extractor = SignalExtractor()
         self._detector = EventDetector()
+        self._cdms = CDMSAnalyzer(cdms_config)
+        self._stft_nperseg: int = cdms_config.stft_nperseg
 
     # ------------------------------------------------------------------
     # Control (call from main thread)
@@ -98,6 +119,9 @@ class AcquisitionWorker(QThread):
         self.status_update.emit("Acquisition started.")
         self._logger.log("Acquisition loop started.")
 
+        # Accumulate mass estimates for accepted traces (for end-of-run histogram)
+        accepted_masses: List[float] = []
+
         while not self._stop_flag:
             try:
                 record = self._service.run_block(self._config)
@@ -105,22 +129,37 @@ class AcquisitionWorker(QThread):
                 record.trace_id = self._trace_id
                 record.run_id = self._run_id
 
-                # Save raw waveform
-                self._logger.save_raw(record)
+                # Full analysis pipeline
+                summary, stft_result, cdms_result = self._analyse(record)
 
-                # Analysis pipeline
-                summary = self._analyse(record)
+                # File I/O
+                self._logger.save_raw(record, stft=stft_result)
                 self._logger.save_event_summary(summary)
+
+                # Accumulate mass for histogram
+                if summary.accepted and summary.mass_Da is not None:
+                    accepted_masses.append(summary.mass_Da)
 
                 # Emit results to main thread
                 self.waveform_ready.emit(record)
                 self.event_ready.emit(summary)
+                self.cdms_ready.emit(cdms_result)
+                self.stft_ready.emit(stft_result)
                 self.trace_count_changed.emit(self._trace_id)
 
             except Exception as exc:
                 self._logger.log(f"Acquisition error: {exc}", level="error")
                 self.error_occurred.emit(str(exc))
                 break
+
+        # Save mass histogram before signalling completion
+        try:
+            self._logger.save_mass_histogram(accepted_masses)
+            self._logger.log(
+                f"Mass histogram saved. Accepted masses: {len(accepted_masses)}"
+            )
+        except Exception as exc:
+            self._logger.log(f"Histogram save failed: {exc}", level="warning")
 
         self._logger.log(
             f"Acquisition loop stopped. Total traces: {self._trace_id}"
@@ -133,10 +172,13 @@ class AcquisitionWorker(QThread):
     # Analysis pipeline (runs on worker thread)
     # ------------------------------------------------------------------
 
-    def _analyse(self, record: WaveformRecord) -> EventSummary:
+    def _analyse(
+        self, record: WaveformRecord
+    ) -> Tuple[EventSummary, STFTResult, CDMSResult]:
         """
-        Run baseline correction, peak finding, and classification for one trace.
-        Returns an EventSummary ready to be saved and emitted.
+        Run the full per-trace analysis pipeline.
+
+        Returns (EventSummary, STFTResult, CDMSResult).
         """
         voltage = record.voltage
 
@@ -160,7 +202,23 @@ class AcquisitionWorker(QThread):
         # Summary statistics
         stats = self._extractor.summarize(peaks, baseline_mean, baseline_rms)
 
-        return EventSummary(
+        # FFT — dominant oscillation frequency
+        _, _, dominant_freq_hz, _ = WaveformProcessor.compute_fft(
+            corrected, record.sample_interval_ns
+        )
+
+        # STFT — time-frequency evolution
+        stft_result = WaveformProcessor.compute_stft(
+            corrected, record.sample_interval_ns, self._stft_nperseg
+        )
+
+        # CDMS physics
+        cdms_result = self._cdms.analyse(
+            dominant_freq_hz=dominant_freq_hz,
+            mean_peak_height_v=stats.get("mean_peak_height_v"),
+        )
+
+        summary = EventSummary(
             trace_id=record.trace_id,
             run_id=record.run_id,
             timestamp=record.timestamp,
@@ -173,4 +231,10 @@ class AcquisitionWorker(QThread):
             num_peaks=stats["num_peaks"],
             mean_peak_height_v=stats.get("mean_peak_height_v"),
             mean_peak_spacing_ns=stats.get("mean_peak_spacing_ns"),
+            oscillation_freq_hz=cdms_result.oscillation_freq_hz,
+            charge_e=cdms_result.charge_e,
+            mz_Da_per_e=cdms_result.mz_Da_per_e,
+            mass_Da=cdms_result.mass_Da,
         )
+
+        return summary, stft_result, cdms_result
