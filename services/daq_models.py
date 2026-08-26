@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 
@@ -138,3 +138,51 @@ class EventSummary:
     charge_e: Optional[float] = None
     mz_Da_per_e: Optional[float] = None
     mass_Da: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Ratemeter configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AmplitudeBand:
+    """One user-defined amplitude window for ratemeter counting."""
+
+    label: str          # e.g. "Band 1", "Band 2"
+    low_mv: float        # lower bound, millivolts (inclusive)
+    high_mv: float       # upper bound, millivolts (inclusive)
+    color: str           # hex color string, e.g. "#4fc3f7"
+
+
+@dataclass
+class RatemeterConfig:
+    """Full configuration for one ratemeter run."""
+
+    channel: str
+    voltage_range_v: float
+    coupling: str
+    sample_interval_ns: int
+    window_duration_ms: float
+    rate_averaging_s: float
+    bands: List[AmplitudeBand]
+
+    @property
+    def num_samples(self) -> int:
+        return max(1, int(self.window_duration_ms * 1e6 / self.sample_interval_ns))
+
+    def to_acquisition_config(
+        self,
+        trigger_enabled: bool = False,
+        trigger_threshold_v: float = 0.0,
+        trigger_direction: str = "RISING",
+    ) -> "AcquisitionConfig":
+        return AcquisitionConfig(
+            channel=self.channel,
+            voltage_range_v=self.voltage_range_v,
+            coupling=self.coupling,
+            sample_interval_ns=self.sample_interval_ns,
+            num_samples=self.num_samples,
+            trigger_enabled=trigger_enabled,
+            trigger_threshold_v=trigger_threshold_v,
+            trigger_direction=trigger_direction,
+        )

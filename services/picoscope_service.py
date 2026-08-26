@@ -176,7 +176,7 @@ class PicoScopeService:
 
         return best_index, best_actual
 
-    def set_trigger(self, config: AcquisitionConfig) -> None:
+    def set_trigger(self, config: AcquisitionConfig, auto_trigger_ms: int = 1000) -> None:
         """Configure a simple edge trigger, or disable triggering."""
         ps = self._get_ps()
 
@@ -208,7 +208,7 @@ class PicoScopeService:
             ctypes.c_int16(threshold_adc),              # threshold in ADC counts
             ctypes.c_int32(direction_enum),             # direction
             ctypes.c_uint32(0),                         # delay (samples)
-            ctypes.c_int16(1000),                       # autoTrigger_ms
+            ctypes.c_int16(auto_trigger_ms),             # autoTrigger_ms
         )
         self._check_status(status, "set_simple_trigger")
 

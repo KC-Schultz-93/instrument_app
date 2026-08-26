@@ -481,6 +481,7 @@ class DAQPage(QWidget):
         self._worker.start()
 
         self.channels.daq_run_started.emit(run_id)
+        self.channels.daq_busy.emit(True)
         self._set_controls_running()
         self.lbl_run_status.setText(f"Running  [{run_id}]")
 
@@ -518,6 +519,7 @@ class DAQPage(QWidget):
         if self._run_id:
             self.channels.daq_run_stopped.emit(self._run_id, total)
 
+        self.channels.daq_busy.emit(False)
         self._set_controls_idle()
         self.lbl_run_status.setText("Stopped")
 
@@ -622,6 +624,15 @@ class DAQPage(QWidget):
     def _on_daq_error(self, msg: str) -> None:
         self.lbl_run_status.setText(f"Error: {msg}")
         self._set_controls_idle()
+
+    def _on_daq_busy(self, busy: bool) -> None:
+        """Disable Start when another page holds the PicoScope."""
+        if busy and self._worker is None:
+            self.btn_start.setEnabled(False)
+            self.lbl_run_status.setText("PicoScope in use by Ratemeter")
+        elif not busy and self._worker is None:
+            self.btn_start.setEnabled(self._service.is_connected)
+            self.lbl_run_status.setText("Idle")
 
     # ------------------------------------------------------------------
     # Helpers

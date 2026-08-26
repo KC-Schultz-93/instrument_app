@@ -12,6 +12,7 @@ import pyqtgraph as pg
 
 from instrument_app.pages.pressure_page import PressureInterlockPage
 from instrument_app.pages.daq_page import DAQPage
+from instrument_app.pages.ratemeter_page import RatemeterPage
 from instrument_app.services.serial_manager import SerialManager
 from instrument_app.services.data_recorder import DataRecorder
 from instrument_app.services.daq_channels import DAQChannels
@@ -44,6 +45,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
         self._build_tabs()
 
+        # mutual exclusion: only one page may hold the PicoScope at a time
+        self.daq_channels.daq_busy.connect(self.daq._on_daq_busy)
+        self.daq_channels.daq_busy.connect(self.ratemeter._on_daq_busy)
+
         # menu (Settings only)
         self._build_menu()
 
@@ -54,8 +59,10 @@ class MainWindow(QMainWindow):
     def _build_tabs(self):
         self.pressure = PressureInterlockPage(serial=self.serial, recorder=self.recorder)
         self.daq = DAQPage(self.daq_channels)
+        self.ratemeter = RatemeterPage(self.daq_channels)
         self.tabs.addTab(self.pressure, "Pressures / Interlocks")
         self.tabs.addTab(self.daq, "DAQ")
+        self.tabs.addTab(self.ratemeter, "Ratemeter")
 
     def _build_menu(self):
         mbar = self.menuBar()
@@ -72,19 +79,73 @@ class MainWindow(QMainWindow):
         """Apply theme QSS + pyqtgraph colors, then nudge pages to restyle."""
         bg_rule = t.BG_QSS or t.BG
         qss = f"""
-            QWidget {{ background:{bg_rule}; color:{t.TXT}; }}
+            QWidget {{ background:{bg_rule}; color:{t.TXT}; font:10pt 'Segoe UI'; }}
 
-            /* Cards, buttons, tables */
-            QGroupBox {{ border:1px solid {t.CARD_BORDER}; border-radius:8px; padding:6px; }}
+            /* Group boxes — brighter border, visible title */
+            QGroupBox {{
+                border:1px solid {t.CARD_BORDER};
+                border-radius:8px;
+                margin-top:10px;
+                padding:8px 4px 4px 4px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 4px;
+                color: {t.TXT_STRONG};
+                font-weight: 600;
+            }}
+
+            /* Buttons */
             QPushButton {{
-                color:{t.TXT}; background:{t.BTN_BG}; border:1px solid {t.BTN_BORDER};
-                padding:6px 10px; border-radius:8px; font:10pt 'Segoe UI';
+                color:{t.TXT_STRONG}; background:{t.BTN_BG}; border:1px solid {t.BTN_BORDER};
+                padding:6px 10px; border-radius:8px;
             }}
             QPushButton:pressed {{ background:{t.BTN_BG_DOWN}; }}
+            QPushButton:disabled {{ color:{t.GRAY}; border-color:{t.CARD_BORDER}; }}
 
+            /* Spin boxes and combo boxes — visible border, slightly lighter fill */
+            QSpinBox, QDoubleSpinBox, QLineEdit {{
+                color:{t.TXT_STRONG}; background:{t.BTN_BG};
+                border:1px solid {t.BTN_BORDER};
+                border-radius:4px; padding:3px 6px;
+                selection-background-color:{t.CARD_BORDER};
+            }}
+            QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {{
+                border:1px solid {t.GOOD};
+            }}
+            QSpinBox::up-button, QSpinBox::down-button,
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+                background:{t.BTN_BG}; border-left:1px solid {t.BTN_BORDER};
+                width:16px;
+            }}
+            QComboBox {{
+                color:{t.TXT_STRONG}; background:{t.BTN_BG};
+                border:1px solid {t.BTN_BORDER};
+                border-radius:4px; padding:3px 6px;
+            }}
+            QComboBox::drop-down {{ border-left:1px solid {t.BTN_BORDER}; width:20px; }}
+            QComboBox QAbstractItemView {{
+                background:{t.CARD_BG}; color:{t.TXT}; border:1px solid {t.CARD_BORDER};
+                selection-background-color:{t.BTN_BG_DOWN};
+            }}
+
+            /* Checkboxes */
+            QCheckBox {{ color:{t.TXT}; spacing:6px; }}
+            QCheckBox::indicator {{
+                width:14px; height:14px;
+                border:1px solid {t.BTN_BORDER}; border-radius:3px;
+                background:{t.BTN_BG};
+            }}
+            QCheckBox::indicator:checked {{ background:{t.GOOD}; border-color:{t.GOOD}; }}
+
+            /* Labels — section labels slightly muted, values bright */
+            QLabel {{ color:{t.TXT}; }}
+
+            /* Tables */
             QTableWidget {{ background:{t.CARD_BG}; gridline-color:{t.CARD_BORDER}; }}
             QHeaderView::section {{
-                background:{t.BTN_BG}; color:{t.TXT}; border:1px solid {t.BTN_BORDER};
+                background:{t.BTN_BG}; color:{t.TXT_STRONG}; border:1px solid {t.BTN_BORDER};
                 padding:4px; font-weight:600;
             }}
 
@@ -94,24 +155,27 @@ class MainWindow(QMainWindow):
             QMenu {{ background:{t.CARD_BG}; color:{t.TXT}; border:1px solid {t.CARD_BORDER}; }}
             QMenu::item:selected {{ background:{t.BTN_BG}; }}
 
+            /* Scroll bars — subtle but visible */
+            QScrollBar:vertical {{
+                background:{t.BG}; width:8px; border-radius:4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background:{t.BTN_BORDER}; border-radius:4px; min-height:20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0px; }}
+
             /* Tabs */
             QTabWidget::pane {{
-                border:1px solid {t.CARD_BORDER};
-                top:-1px;
-                background:{t.CARD_BG};
+                border:1px solid {t.CARD_BORDER}; top:-1px; background:{t.CARD_BG};
             }}
             QTabBar::tab {{
-                background:{t.BTN_BG};
-                color:{t.TXT};
+                background:{t.BTN_BG}; color:{t.TXT};
                 border:1px solid {t.BTN_BORDER};
-                padding:6px 10px;
-                margin-right:2px;
-                border-top-left-radius:6px;
-                border-top-right-radius:6px;
+                padding:6px 10px; margin-right:2px;
+                border-top-left-radius:6px; border-top-right-radius:6px;
             }}
             QTabBar::tab:selected {{
-                background:{t.CARD_BG};
-                color:{t.TXT_STRONG};
+                background:{t.CARD_BG}; color:{t.TXT_STRONG};
                 border-bottom-color:{t.CARD_BG};
             }}
             QTabBar::tab:!selected:hover {{ background:{t.BTN_BG_DOWN}; }}
@@ -122,7 +186,7 @@ class MainWindow(QMainWindow):
         pg.setConfigOptions(background=t.PLOT_BG, foreground=t.TXT)
 
         # let pages update any widget-level styles they own
-        for page in (getattr(self, "pressure", None), getattr(self, "daq", None)):
+        for page in (getattr(self, "pressure", None), getattr(self, "daq", None), getattr(self, "ratemeter", None)):
             if page and hasattr(page, "_apply_theme_to_self"):
                 page._apply_theme_to_self(t)
 
@@ -144,6 +208,7 @@ class MainWindow(QMainWindow):
         try:
             if hasattr(self.pressure, "close"): self.pressure.close()
             if hasattr(self.daq, "stop_acquisition"): self.daq.stop_acquisition()
+            if hasattr(self.ratemeter, "stop_acquisition"): self.ratemeter.stop_acquisition()
         finally:
             super().closeEvent(ev)
 

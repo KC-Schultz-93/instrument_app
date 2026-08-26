@@ -19,6 +19,7 @@ class DAQChannels(QObject):
     daq_event_summary = pyqtSignal(object)  # emits EventSummary
     daq_run_started = pyqtSignal(str)       # run_id
     daq_run_stopped = pyqtSignal(str, int)  # run_id, total_traces
+    daq_busy = pyqtSignal(bool)             # True = PicoScope in use, False = released
 
     def __init__(self, parent=None):
         super().__init__(parent)

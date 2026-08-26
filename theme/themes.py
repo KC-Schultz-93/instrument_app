@@ -78,13 +78,55 @@ CHROMA_GLOW = Theme(
     PLOT_BG="#0b1220",
 )
 
+# --- Ember (warm orange on charcoal) ---
+
+EMBER = Theme(
+    BG="#16141f",
+    BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+            "stop:0 #16141f, stop:0.5 #1e1e2c, stop:1 #2a1a10)"),
+    TXT="#FFF0E8", TXT_STRONG="#FFFFFF",
+    CARD_BG="#1e1c28", CARD_BORDER="#3d2e1e",
+    BTN_BG="#2a2030", BTN_BG_DOWN="#1e1828", BTN_BORDER="#5a3a22",
+    GOOD="#34b1aa", BAD="#ff5a6b", GRAY="#8a7f7f",
+    PLOT_BG="#16141f",
+)
+
+# --- Violet (deep purple) ---
+
+VIOLET = Theme(
+    BG="#0e0a1a",
+    BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+            "stop:0 #0e0a1a, stop:0.45 #1a1040, stop:1 #0d1f4a)"),
+    TXT="#EAE8FF", TXT_STRONG="#FFFFFF",
+    CARD_BG="#140f2a", CARD_BORDER="#2e1f6e",
+    BTN_BG="#1c1438", BTN_BG_DOWN="#140f2a", BTN_BORDER="#3d2a8a",
+    GOOD="#0dcaf0", BAD="#ff4d7a", GRAY="#8a80a8",
+    PLOT_BG="#0e0a1a",
+)
+
+# --- Hazard (amber warning) ---
+
+HAZARD = Theme(
+    BG="#0f0c00",
+    BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+            "stop:0 #0f0c00, stop:0.5 #1a1500, stop:1 #261e00)"),
+    TXT="#FFF8DC", TXT_STRONG="#FFFFFF",
+    CARD_BG="#1a1600", CARD_BORDER="#3d3000",
+    BTN_BG="#231d00", BTN_BG_DOWN="#1a1500", BTN_BORDER="#5a4600",
+    GOOD="#e0b50f", BAD="#ff4136", GRAY="#8a8060",
+    PLOT_BG="#0f0c00",
+)
+
 THEMES = {
     "Light": LIGHT,
     "Dark": DARK,
     "Submarine": SUBMARINE,
     "Neon Lights": NEON_LIGHTS,
     "Chroma Glow": CHROMA_GLOW,
-}
+    "Ember": EMBER,
+    "Violet": VIOLET,
+    "Hazard": HAZARD
+    }
 
 # Start with Submarine unless the user has a saved choice in QSettings
 DEFAULT_THEME = "Submarine"
