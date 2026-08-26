@@ -64,6 +64,10 @@ desktop.ini
 # Logs / local overrides
 *.log
 *.local
+crash_log.txt
+
+# DAQ/pressure data output
+Recorded Data/
 
 # Project-specific
 read_me.toml

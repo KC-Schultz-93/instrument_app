@@ -1,35 +1,33 @@
-Architecture review and targeted improvements
+Architecture
 
 Overview
 
-- Current structure (services/ vs processing/ vs pages/) is solid and already modular.
 - Two main user-facing tabs exist:
-  - pages/cdms_page.py as the operator station (AO/DO, acquisition, basic event triage)
-  - pages/processing_page.py as the analysis dashboard (calibration, m/z histograms)
-- services/scope_pico.py handles Pico Rapid mode cleanly with Qt signals.
-- processing/geo_calibration.py centralizes physics and per-frame FFT+peak logic.
+  - pages/pressure_page.py: pressure/interlock monitoring and control, via services/serial_manager.py.
+  - pages/daq_page.py: PicoScope 4262 waveform acquisition and CDMS analysis.
+- The DAQ pipeline runs synchronously inside services/acquisition_worker.py (a QThread), calling
+  services/picoscope_service.py -> services/event_detector.py -> services/signal_extractor.py ->
+  services/cdms_analyzer.py -> services/daq_logger.py in sequence per trace. No shared event bus;
+  the worker emits results via services/daq_channels.py (a DAQ-only Qt signal bus) back to daq_page.py.
+- DAQ and pressure/serial are intentionally decoupled: neither imports the other's services, and
+  daq_channels.py carries no serial/pressure signals.
 
-Pain points and opportunities
+History note
 
-- Wiring duplication: Both pages set up their own threads and connect source -> analyzer/worker directly. This repeats lifecycle logic and makes it harder to add a second consumer later.
-- Event/result types: cdms_page defines its own EventResult and inline Analyzer; processing defines Ion in geo_calibration. We can tighten these contracts so producers/consumers agree on a couple of shared types.
-- Streaming histograms: NumPy hist updates work, but scale better with a columnar store when ion rates increase or when we want snapshots/queries. Polars fits this nicely.
-- Single-scope ownership: Multiple places can instantiate a Pico service today. Centralizing ownership simplifies coordination and avoids accidental double-opens.
+- An earlier, independent PicoScope/CDMS pipeline was built directly on this branch: core/bus.py
+  (a general Qt signal bus), services/scope_pico.py (ps4000a driver), services/sources.py,
+  processing/processor_worker.py, processing/geo_calibration.py, processing/aggregators.py,
+  pages/cdms_page.py, and pages/processing_page.py. It was developed in parallel with, and
+  independently of, the DAQ pipeline built on the nano_daq branch (ps4000 driver, worker-thread
+  model, no shared bus). When the two branches were merged, the nano_daq pipeline was kept as the
+  one going forward (it matches the current CLAUDE.md spec and hardware driver), and the bus-based
+  pipeline and its exclusive dependents were removed rather than run in parallel.
+- If old commit history, comments, or docs reference core/bus.py, services/scope_pico.py,
+  services/sources.py, processing/*, pages/cdms_page.py, or pages/processing_page.py, they're
+  describing the removed pipeline.
 
-Additions in this change set
+Adding to the DAQ pipeline
 
-- core/bus.py: A lightweight Qt signal bus (frame_block, ions_batch, status). Producers and consumers can connect without hard references to each other. Enables multi-subscriber graphs.
-- processing/aggregators.py: PolarsHistogram for scalable, incremental histograms (with a NumPy fallback). Accepts List[Ion] and returns edges/counts for plotting.
-- services/sources.py: Unified SyntheticSource, PicoSource, and a SourceManager to control a single active source and publish frames on the bus. Pages can subscribe to the bus and no longer need to own the scope lifecycle directly.
-- requirements.txt: Promote polars for analysis; keep pyarrow/duckdb as optional.
-
-Notes on Polars use
-
-- For light rates, NumPy remains fine. Polars starts to shine when ion counts become large or when downstream exports/queries are needed (e.g., cut-by-range, per-ion snapshots, parquet export).
-- The PolarsHistogram maintains an append-only column for the target field, and computes bins via a bin-index group_by, which is efficient and robust.
-
-Compatibility and risk
-
-- No existing behavior is removed by this patch. The new modules are additive.
-- Migration can be done page-by-page: first route frames via bus, then plug in a processor-on-bus, finally switch histogram over to Polars.
-
+- Each services/ module owns one concern (see CLAUDE.md's module ownership table). Extend a
+  module in place rather than adding a new bus/signal path — the worker-thread + direct-call
+  model is deliberate, not a placeholder for a future event bus.
