@@ -151,7 +151,7 @@ class RatemeterPage(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._make_left_panel())
         splitter.addWidget(self._make_right_panel())
-        splitter.setSizes([320, 900])
+        splitter.setSizes([340, 900])
         splitter.setChildrenCollapsible(False)
 
         root.addWidget(splitter)
@@ -159,7 +159,7 @@ class RatemeterPage(QWidget):
     def _make_left_panel(self) -> QWidget:
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
         layout.addWidget(self._make_connection_group())
@@ -173,7 +173,9 @@ class RatemeterPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
-        scroll.setFixedWidth(320)
+        scroll.setMinimumWidth(340)
+        scroll.setMaximumWidth(340)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         return scroll
 
     def _make_connection_group(self) -> QGroupBox:
@@ -186,13 +188,16 @@ class RatemeterPage(QWidget):
         self.btn_disconnect = QPushButton("Disconnect")
         self.btn_disconnect.clicked.connect(self._on_disconnect_clicked)
 
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.btn_connect)
+        btn_row.addWidget(self.btn_disconnect)
+        lay.addLayout(btn_row)
+
         self.lbl_connection = QLabel("Disconnected")
         self.lbl_connection.setAlignment(Qt.AlignCenter)
         self._set_label_bad(self.lbl_connection, "Disconnected")
-
-        lay.addWidget(self.btn_connect)
-        lay.addWidget(self.btn_disconnect)
         lay.addWidget(self.lbl_connection)
+
         return box
 
     def _make_acquisition_group(self) -> QGroupBox:
@@ -589,6 +594,7 @@ class RatemeterPage(QWidget):
             self._service.connect()
         except Exception as exc:
             self._on_error(f"Connect failed: {exc}")
+            self._set_label_bad(self.lbl_connection, "Connect failed")
             return
         self._set_label_good(self.lbl_connection, "Connected")
         self._set_controls_idle()
