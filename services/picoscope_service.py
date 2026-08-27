@@ -101,8 +101,8 @@ class PicoScopeService:
         Raises RuntimeError if no device is found or the SDK call fails.
         """
         ps = self._get_ps()
-        status = ps.open_unit(ctypes.byref(self._handle))
-        self._check_status(status, "open_unit")
+        status = ps.ps4000OpenUnit(ctypes.byref(self._handle))
+        self._check_status(status, "ps4000OpenUnit")
         self._connected = True
 
     def disconnect(self) -> None:
@@ -110,7 +110,7 @@ class PicoScopeService:
         if not self._connected:
             return
         ps = self._get_ps()
-        ps.close_unit(self._handle)
+        ps.ps4000CloseUnit(self._handle)
         self._handle = ctypes.c_int16(0)
         self._connected = False
 
@@ -138,14 +138,14 @@ class PicoScopeService:
 
         # Disable all channels first, then enable the requested one.
         for ch in range(4):
-            status = ps.set_channel(
+            status = ps.ps4000SetChannel(
                 self._handle,
                 ctypes.c_int32(ch),
                 ctypes.c_int16(1 if ch == channel_enum else 0),  # enabled
                 ctypes.c_int32(coupling_enum if ch == channel_enum else 1),
                 ctypes.c_int32(range_enum if ch == channel_enum else 7),
             )
-            self._check_status(status, f"set_channel(ch={ch})")
+            self._check_status(status, f"ps4000SetChannel(ch={ch})")
 
     def get_timebase(self, config: AcquisitionConfig) -> Tuple[int, int]:
         """
@@ -182,7 +182,7 @@ class PicoScopeService:
 
         if not config.trigger_enabled:
             # Disable trigger by setting enabled=0
-            status = ps.set_simple_trigger(
+            status = ps.ps4000SetSimpleTrigger(
                 self._handle,
                 ctypes.c_int16(0),          # enabled = false
                 ctypes.c_int32(0),          # source (ignored)
@@ -191,7 +191,7 @@ class PicoScopeService:
                 ctypes.c_uint32(0),         # delay
                 ctypes.c_int16(0),          # autoTrigger_ms (0 = wait forever)
             )
-            self._check_status(status, "set_simple_trigger(disabled)")
+            self._check_status(status, "ps4000SetSimpleTrigger(disabled)")
             return
 
         threshold_v = config.trigger_threshold_v or 0.0
@@ -201,7 +201,7 @@ class PicoScopeService:
         direction_enum = _DIRECTION_MAP.get(config.trigger_direction.upper(), 2)
         channel_enum = _CHANNEL_MAP.get(config.channel.upper(), 0)
 
-        status = ps.set_simple_trigger(
+        status = ps.ps4000SetSimpleTrigger(
             self._handle,
             ctypes.c_int16(1),                          # enabled
             ctypes.c_int32(channel_enum),               # source channel
@@ -210,7 +210,7 @@ class PicoScopeService:
             ctypes.c_uint32(0),                         # delay (samples)
             ctypes.c_int16(auto_trigger_ms),             # autoTrigger_ms
         )
-        self._check_status(status, "set_simple_trigger")
+        self._check_status(status, "ps4000SetSimpleTrigger")
 
     # ------------------------------------------------------------------
     # Acquisition
@@ -239,7 +239,7 @@ class PicoScopeService:
 
         # RunBlock
         time_indisposed = ctypes.c_int32(0)
-        status = ps.run_block(
+        status = ps.ps4000RunBlock(
             self._handle,
             ctypes.c_int32(config.pre_trigger_samples),
             ctypes.c_int32(post_samples),
@@ -250,13 +250,13 @@ class PicoScopeService:
             None,                           # lpReady callback (use polling)
             None,                           # pParameter
         )
-        self._check_status(status, "run_block")
+        self._check_status(status, "ps4000RunBlock")
 
         # Poll until ready
         ready = ctypes.c_int16(0)
         for _ in range(100_000):
-            status = ps.is_ready(self._handle, ctypes.byref(ready))
-            self._check_status(status, "is_ready")
+            status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
+            self._check_status(status, "ps4000IsReady")
             if ready.value:
                 break
             time.sleep(0.001)
@@ -267,17 +267,17 @@ class PicoScopeService:
         channel_enum = _CHANNEL_MAP[config.channel.upper()]
         buffer = (ctypes.c_int16 * config.num_samples)()
 
-        status = ps.set_data_buffer(
+        status = ps.ps4000SetDataBuffer(
             self._handle,
             ctypes.c_int32(channel_enum),
             ctypes.byref(buffer),
             ctypes.c_int32(config.num_samples),
         )
-        self._check_status(status, "set_data_buffer")
+        self._check_status(status, "ps4000SetDataBuffer")
 
         overflow = ctypes.c_int16(0)
         n_values = ctypes.c_int32(config.num_samples)
-        status = ps.get_values(
+        status = ps.ps4000GetValues(
             self._handle,
             ctypes.c_uint32(0),             # startIndex
             ctypes.byref(n_values),
@@ -286,7 +286,7 @@ class PicoScopeService:
             ctypes.c_uint32(0),             # segmentIndex
             ctypes.byref(overflow),
         )
-        self._check_status(status, "get_values")
+        self._check_status(status, "ps4000GetValues")
 
         n = n_values.value
         raw = np.frombuffer(buffer, dtype=np.int16, count=n).astype(np.float64)

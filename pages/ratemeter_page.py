@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -173,9 +174,19 @@ class RatemeterPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
+<<<<<<< HEAD
         scroll.setMinimumWidth(340)
         scroll.setMaximumWidth(340)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+=======
+        scroll.setMinimumWidth(320)
+        scroll.setMaximumWidth(640)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # Fixed horizontal policy: only the splitter handle should change this
+        # panel's width. Without this, Qt redistributes extra space to it on
+        # any layout/window resize event, snapping it toward setMaximumWidth.
+        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+>>>>>>> 133b996eeec2f18a3c55e2c410282b38790d3cbe
         return scroll
 
     def _make_connection_group(self) -> QGroupBox:
@@ -306,7 +317,10 @@ class RatemeterPage(QWidget):
 
         self.table_bands = QTableWidget(0, 4)
         self.table_bands.setHorizontalHeaderLabels(["#", "Low (mV)", "High (mV)", "Color"])
-        self.table_bands.horizontalHeader().setStretchLastSection(True)
+        header = self.table_bands.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for col in (1, 2, 3):
+            header.setSectionResizeMode(col, QHeaderView.Stretch)
         self.table_bands.setFixedHeight(160)
         self.table_bands.itemChanged.connect(self._on_band_item_changed)
         self.table_bands.cellDoubleClicked.connect(self._on_band_cell_double_clicked)
