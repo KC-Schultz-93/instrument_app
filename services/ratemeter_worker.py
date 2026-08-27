@@ -68,8 +68,20 @@ class RatemeterWorker(QThread):
 
                 baseline_mean, baseline_rms = WaveformProcessor.estimate_baseline(record.voltage)
                 corrected = WaveformProcessor.subtract_baseline(record.voltage, baseline_mean)
+
+                # Use the lowest band boundary (×0.9) as the height threshold so
+                # any peak that could fall in a band is detected.  A sigma-based
+                # threshold would be set at the signal amplitude for continuous
+                # signals (no quiet pre-trigger baseline), silencing all peaks.
+                min_band_v = (
+                    min(b.low_mv for b in self._config.bands) / 1000.0
+                    if self._config.bands else None
+                )
+                height_override = min_band_v * 0.9 if min_band_v else None
+
                 peaks = self._extractor.find_peaks(
-                    corrected, baseline_mean, baseline_rms, record.time_ns
+                    corrected, baseline_mean, baseline_rms, record.time_ns,
+                    height_threshold_v=height_override,
                 )
 
                 now = time.monotonic()

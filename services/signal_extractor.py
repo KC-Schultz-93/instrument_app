@@ -55,6 +55,7 @@ class SignalExtractor:
         baseline_mean: float,
         baseline_rms: float,
         time_ns: np.ndarray,
+        height_threshold_v: Optional[float] = None,
     ) -> List[PeakRecord]:
         """
         Find peaks in the (baseline-corrected) voltage trace.
@@ -69,14 +70,22 @@ class SignalExtractor:
             Baseline RMS (used to compute sigma-based threshold).
         time_ns : ndarray
             Time array in nanoseconds, same length as voltage.
+        height_threshold_v : float, optional
+            Explicit height threshold in volts.  When provided, overrides the
+            sigma-based rule (min_height_sigma * baseline_rms).  Use this when
+            the caller knows the minimum amplitude of interest directly (e.g.
+            the lowest band lower bound) rather than deriving it from noise RMS.
 
         Returns
         -------
         List[PeakRecord]
             Peaks sorted by time (ascending).
         """
-        # voltage is baseline-corrected (mean ≈ 0), so threshold is relative to 0
-        height_threshold = self.min_height_sigma * baseline_rms
+        if height_threshold_v is not None:
+            height_threshold = height_threshold_v
+        else:
+            # voltage is baseline-corrected (mean ≈ 0), so threshold is relative to 0
+            height_threshold = self.min_height_sigma * baseline_rms
 
         indices, properties = find_peaks(
             voltage,

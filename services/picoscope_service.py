@@ -9,7 +9,7 @@ from a worker thread (run_block is a blocking call).
 
 Hardware notes:
   - ADC max count for ps4000 series: 32512 (not 32768)
-  - Timebase 0 â†’ 10 ns, 1 â†’ 20 ns, n â‰¥ 2 â†’ (n-2)*8 + 32 ns
+  - Timebase 0 â†' 10 ns, 1 â†' 20 ns, n â‰¥ 2 â†' (n-2)*8 + 32 ns
   - ps4000 uses int16 buffers; SetDataBuffer must be called before GetValues
   - The ctypes buffer must remain alive until GetValues completes
 """
@@ -156,9 +156,9 @@ class PicoScopeService:
             (timebase_index, actual_interval_ns)
 
         ps4000 timebase mapping:
-            0 â†’ 10 ns
-            1 â†’ 20 ns
-            n â‰¥ 2 â†’ (n-2)*8 + 32 ns
+            0 â†' 10 ns
+            1 â†' 20 ns
+            n â‰¥ 2 â†' (n-2)*8 + 32 ns
         """
         target_ns = config.sample_interval_ns
 
@@ -221,14 +221,14 @@ class PicoScopeService:
 
     def run_block(self, config: AcquisitionConfig) -> WaveformRecord:
         """
-        Run one block acquisition. BLOCKING â€” call from a worker thread.
+        Run one block acquisition. BLOCKING â€" call from a worker thread.
 
         Steps:
           1. Determine timebase
           2. ps4000RunBlock
           3. Poll ps4000IsReady (yields GIL via time.sleep)
           4. ps4000SetDataBuffer + ps4000GetValues
-          5. ADC â†’ volts conversion
+          5. ADC â†' volts conversion
           6. Return WaveformRecord
 
         The ctypes buffer is kept alive in a local variable until GetValues
@@ -258,18 +258,18 @@ class PicoScopeService:
             None,                           # lpReady callback (use polling)
             None,                           # pParameter
         )
-        self._check_status(status, “ps4000RunBlock”)
+        self._check_status(status, "ps4000RunBlock")
 
         # Poll until ready
         ready = ctypes.c_int16(0)
         for _ in range(100_000):
             status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
-            self._check_status(status, “ps4000IsReady”)
+            self._check_status(status, "ps4000IsReady")
             if ready.value:
                 break
             time.sleep(0.001)
         else:
-            raise RuntimeError(“PicoScope: run_block timed out waiting for ready.”)
+            raise RuntimeError("PicoScope: run_block timed out waiting for ready.")
 
         # Allocate int16 buffers. Use ps4000SetDataBuffers (plural) — the form
         # used in all official picosdk examples — to avoid a driver quirk where
@@ -286,7 +286,7 @@ class PicoScopeService:
             ctypes.byref(buffer_min),
             config.num_samples,
         )
-        self._check_status(status, “ps4000SetDataBuffers”)
+        self._check_status(status, "ps4000SetDataBuffers")
 
         overflow = ctypes.c_int16(0)
         n_values = ctypes.c_int32(config.num_samples)
@@ -304,7 +304,7 @@ class PicoScopeService:
         n = n_values.value
         raw = np.frombuffer(buffer, dtype=np.int16, count=n).astype(np.float64)
 
-        # ADC â†’ volts
+        # ADC â†' volts
         voltage = raw / _ADC_MAX * config.voltage_range_v
         if config.invert_polarity:
             voltage = -voltage
