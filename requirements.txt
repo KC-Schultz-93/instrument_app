@@ -6,7 +6,7 @@ pyserial>=3.5,<4.0
 scipy>=1.13,<2.0
 
 # PicoScope SDK wrapper (ps4000 driver family; install PicoSDK drivers separately)
-picosdk-python-wrappers>=1.1
+picosdk>=1.1
 
 # Analysis stack for scalable histograms
 polars>=1.6

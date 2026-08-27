@@ -323,13 +323,35 @@ class PicoScopeService:
     def _get_ps(self):
         """Lazy-load the picosdk ps4000 module."""
         if self._ps is None:
+            import os, sys
+            if sys.platform == "win32":
+                # picosdk uses find_library("ps4000") which searches PATH, then
+                # loads the DLL via WinDLL. ps4000.dll in turn loads picoipp.dll
+                # dynamically at runtime (LoadLibrary by name), so that DLL also
+                # needs to be reachable. We add each candidate directory to both
+                # PATH (for find_library) and via os.add_dll_directory (for the
+                # runtime LoadLibrary call on Python 3.8+).
+                candidates = [
+                    # PicoScope 7 install dir — contains a matched, tested set of
+                    # ps4000.dll + picoipp.dll and is confirmed to talk to hardware.
+                    r"C:\Program Files\Pico Technology\PicoScope 7 T&M Stable",
+                    r"C:\Program Files\Pico Technology\SDK\lib",
+                    r"C:\Program Files (x86)\Pico Technology\SDK\lib",
+                ]
+                for d in candidates:
+                    if os.path.isdir(d):
+                        if d not in os.environ.get("PATH", ""):
+                            os.environ["PATH"] = d + os.pathsep + os.environ["PATH"]
+                        try:
+                            os.add_dll_directory(d)
+                        except OSError:
+                            pass
             try:
                 from picosdk.ps4000 import ps4000 as ps
                 self._ps = ps
             except ImportError as exc:
                 raise ImportError(
-                    "picosdk-python-wrappers is not installed. "
-                    "Run: pip install picosdk-python-wrappers"
+                    "picosdk is not installed. Run: pip install picosdk"
                 ) from exc
         return self._ps
 
