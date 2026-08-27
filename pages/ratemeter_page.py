@@ -174,11 +174,6 @@ class RatemeterPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
-<<<<<<< HEAD
-        scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(340)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-=======
         scroll.setMinimumWidth(320)
         scroll.setMaximumWidth(640)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -186,7 +181,6 @@ class RatemeterPage(QWidget):
         # panel's width. Without this, Qt redistributes extra space to it on
         # any layout/window resize event, snapping it toward setMaximumWidth.
         scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
->>>>>>> 133b996eeec2f18a3c55e2c410282b38790d3cbe
         return scroll
 
     def _make_connection_group(self) -> QGroupBox:
