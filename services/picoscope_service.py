@@ -240,6 +240,11 @@ class PicoScopeService:
         post_samples = config.num_samples - config.pre_trigger_samples
         timebase_index, actual_interval_ns = self.get_timebase(config)
 
+        # Cancel any leftover acquisition from a previous cycle or stale state.
+        # ps4000Stop is safe to call when idle; without it IsReady can stay
+        # stuck if the device was left mid-acquisition.
+        ps.ps4000Stop(self._handle)
+
         # RunBlock
         time_indisposed = ctypes.c_int32(0)
         status = ps.ps4000RunBlock(
@@ -253,30 +258,35 @@ class PicoScopeService:
             None,                           # lpReady callback (use polling)
             None,                           # pParameter
         )
-        self._check_status(status, "ps4000RunBlock")
+        self._check_status(status, “ps4000RunBlock”)
 
         # Poll until ready
         ready = ctypes.c_int16(0)
         for _ in range(100_000):
             status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
-            self._check_status(status, "ps4000IsReady")
+            self._check_status(status, “ps4000IsReady”)
             if ready.value:
                 break
             time.sleep(0.001)
         else:
-            raise RuntimeError("PicoScope: run_block timed out waiting for ready.")
+            raise RuntimeError(“PicoScope: run_block timed out waiting for ready.”)
 
-        # Allocate int16 buffer â€” keep reference alive until GetValues returns
+        # Allocate int16 buffers. Use ps4000SetDataBuffers (plural) — the form
+        # used in all official picosdk examples — to avoid a driver quirk where
+        # the singular ps4000SetDataBuffer leaves the min-buffer unregistered
+        # and GetValues writes nothing.
         channel_enum = _CHANNEL_MAP[config.channel.upper()]
-        buffer = (ctypes.c_int16 * config.num_samples)()
+        buffer     = (ctypes.c_int16 * config.num_samples)()
+        buffer_min = (ctypes.c_int16 * config.num_samples)()  # unused placeholder
 
-        status = ps.ps4000SetDataBuffer(
+        status = ps.ps4000SetDataBuffers(
             self._handle,
             channel_enum,
             ctypes.byref(buffer),
+            ctypes.byref(buffer_min),
             config.num_samples,
         )
-        self._check_status(status, "ps4000SetDataBuffer")
+        self._check_status(status, “ps4000SetDataBuffers”)
 
         overflow = ctypes.c_int16(0)
         n_values = ctypes.c_int32(config.num_samples)
