@@ -136,8 +136,9 @@ class PicoScopeService:
         range_enum = self._nearest_range_enum(config.voltage_range_v)
         coupling_enum = _COUPLING_MAP.get(config.coupling.upper(), 1)
 
-        # Disable all channels first, then enable the requested one.
-        for ch in range(4):
+        # ps4000 4262 has two channels (A=0, B=1). Iterating beyond that
+        # returns PICO_INVALID_CHANNEL on this device.
+        for ch in range(2):
             status = ps.ps4000SetChannel(
                 self._handle,
                 ch,
