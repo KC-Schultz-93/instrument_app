@@ -140,10 +140,10 @@ class PicoScopeService:
         for ch in range(4):
             status = ps.ps4000SetChannel(
                 self._handle,
-                ctypes.c_int32(ch),
-                ctypes.c_int16(1 if ch == channel_enum else 0),  # enabled
-                ctypes.c_int32(coupling_enum if ch == channel_enum else 1),
-                ctypes.c_int32(range_enum if ch == channel_enum else 7),
+                ch,
+                1 if ch == channel_enum else 0,
+                coupling_enum if ch == channel_enum else 1,
+                range_enum if ch == channel_enum else 7,
             )
             self._check_status(status, f"ps4000SetChannel(ch={ch})")
 
@@ -184,12 +184,12 @@ class PicoScopeService:
             # Disable trigger by setting enabled=0
             status = ps.ps4000SetSimpleTrigger(
                 self._handle,
-                ctypes.c_int16(0),          # enabled = false
-                ctypes.c_int32(0),          # source (ignored)
-                ctypes.c_int16(0),          # threshold (ignored)
-                ctypes.c_int32(2),          # direction RISING (ignored)
-                ctypes.c_uint32(0),         # delay
-                ctypes.c_int16(0),          # autoTrigger_ms (0 = wait forever)
+                0,   # enabled = false
+                0,   # source (ignored)
+                0,   # threshold (ignored)
+                2,   # direction RISING (ignored)
+                0,   # delay
+                0,   # autoTrigger_ms (0 = wait forever)
             )
             self._check_status(status, "ps4000SetSimpleTrigger(disabled)")
             return
@@ -203,12 +203,12 @@ class PicoScopeService:
 
         status = ps.ps4000SetSimpleTrigger(
             self._handle,
-            ctypes.c_int16(1),                          # enabled
-            ctypes.c_int32(channel_enum),               # source channel
-            ctypes.c_int16(threshold_adc),              # threshold in ADC counts
-            ctypes.c_int32(direction_enum),             # direction
-            ctypes.c_uint32(0),                         # delay (samples)
-            ctypes.c_int16(auto_trigger_ms),             # autoTrigger_ms
+            1,                   # enabled
+            channel_enum,        # source channel
+            threshold_adc,       # threshold in ADC counts
+            direction_enum,      # direction
+            0,                   # delay (samples)
+            auto_trigger_ms,     # autoTrigger_ms
         )
         self._check_status(status, "ps4000SetSimpleTrigger")
 
@@ -241,12 +241,12 @@ class PicoScopeService:
         time_indisposed = ctypes.c_int32(0)
         status = ps.ps4000RunBlock(
             self._handle,
-            ctypes.c_int32(config.pre_trigger_samples),
-            ctypes.c_int32(post_samples),
-            ctypes.c_uint32(timebase_index),
-            ctypes.c_int16(1),              # oversample = 1
+            config.pre_trigger_samples,
+            post_samples,
+            timebase_index,
+            1,                              # oversample = 1
             ctypes.byref(time_indisposed),
-            ctypes.c_uint32(0),             # segmentIndex
+            0,                              # segmentIndex
             None,                           # lpReady callback (use polling)
             None,                           # pParameter
         )
@@ -269,9 +269,9 @@ class PicoScopeService:
 
         status = ps.ps4000SetDataBuffer(
             self._handle,
-            ctypes.c_int32(channel_enum),
+            channel_enum,
             ctypes.byref(buffer),
-            ctypes.c_int32(config.num_samples),
+            config.num_samples,
         )
         self._check_status(status, "ps4000SetDataBuffer")
 
@@ -279,11 +279,11 @@ class PicoScopeService:
         n_values = ctypes.c_int32(config.num_samples)
         status = ps.ps4000GetValues(
             self._handle,
-            ctypes.c_uint32(0),             # startIndex
+            0,                              # startIndex
             ctypes.byref(n_values),
-            ctypes.c_uint32(1),             # downSampleRatio
-            ctypes.c_int32(0),             # downSampleRatioMode = NONE
-            ctypes.c_uint32(0),             # segmentIndex
+            1,                              # downSampleRatio
+            0,                              # downSampleRatioMode = NONE
+            0,                              # segmentIndex
             ctypes.byref(overflow),
         )
         self._check_status(status, "ps4000GetValues")
