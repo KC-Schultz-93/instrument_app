@@ -75,7 +75,8 @@ class SignalExtractor:
         List[PeakRecord]
             Peaks sorted by time (ascending).
         """
-        height_threshold = baseline_mean + self.min_height_sigma * baseline_rms
+        # voltage is baseline-corrected (mean ≈ 0), so threshold is relative to 0
+        height_threshold = self.min_height_sigma * baseline_rms
 
         indices, properties = find_peaks(
             voltage,
@@ -90,7 +91,7 @@ class SignalExtractor:
                 PeakRecord(
                     peak_index=int(idx),
                     time_ns=float(time_ns[idx]),
-                    amplitude_v=float(voltage[idx] - baseline_mean),
+                    amplitude_v=float(voltage[idx]),  # already baseline-corrected
                 )
             )
 

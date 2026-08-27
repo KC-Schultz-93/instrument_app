@@ -182,15 +182,17 @@ class PicoScopeService:
         ps = self._get_ps()
 
         if not config.trigger_enabled:
-            # Disable trigger by setting enabled=0
+            # Disable trigger by setting enabled=0. Pass auto_trigger_ms even
+            # here: 4262 firmware may still apply the auto-trigger timer when
+            # enabled=0, so hardcoding 0 ("wait forever") hangs indefinitely.
             status = ps.ps4000SetSimpleTrigger(
                 self._handle,
-                0,   # enabled = false
-                0,   # source (ignored)
-                0,   # threshold (ignored)
-                2,   # direction RISING (ignored)
-                0,   # delay
-                0,   # autoTrigger_ms (0 = wait forever)
+                0,              # enabled = false
+                0,              # source (ignored)
+                0,              # threshold (ignored)
+                2,              # direction RISING (ignored)
+                0,              # delay
+                auto_trigger_ms,
             )
             self._check_status(status, "ps4000SetSimpleTrigger(disabled)")
             return
