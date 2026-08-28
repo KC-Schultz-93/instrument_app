@@ -66,6 +66,12 @@ class PeakRecord:
     time_ns: float              # time from trace start, nanoseconds
     amplitude_v: float          # peak height above baseline, volts
 
+    # Width fields — populated by SignalExtractor.find_peaks(); None if measurement fails
+    width_samples: Optional[float] = None   # full-width at rel_height, in samples
+    width_ns: Optional[float] = None        # transit duration in nanoseconds
+    rise_ns: Optional[float] = None         # leading-edge crossing time (ns)
+    fall_ns: Optional[float] = None         # trailing-edge crossing time (ns)
+
 
 # ---------------------------------------------------------------------------
 # Reduced event summary
@@ -152,6 +158,7 @@ class AmplitudeBand:
     low_mv: float        # lower bound, millivolts (inclusive)
     high_mv: float       # upper bound, millivolts (inclusive)
     color: str           # hex color string, e.g. "#4fc3f7"
+    transit_min_width_ns: Optional[float] = None   # None disables width discrimination
 
 
 @dataclass
@@ -165,6 +172,8 @@ class RatemeterConfig:
     window_duration_ms: float
     rate_averaging_s: float
     bands: List[AmplitudeBand]
+    electrode_length_m: float = 0.03302   # 1.3 inches — pickup electrode length
+    width_rel_height: float = 0.5         # fractional height for peak_widths (0.5 = FWHM)
 
     @property
     def num_samples(self) -> int:
@@ -186,3 +195,19 @@ class RatemeterConfig:
             trigger_threshold_v=trigger_threshold_v,
             trigger_direction=trigger_direction,
         )
+
+
+@dataclass
+class RatemeterEvent:
+    """
+    One detected peak event from the ratemeter worker.
+    Emitted per peak regardless of recording state; logged to CSV when recording.
+    """
+
+    timestamp: datetime
+    band_label: str
+    amplitude_mv: float
+    width_ns: Optional[float]        # None if width measurement failed
+    event_type: str                  # "transit" | "splat" | "unknown"
+    velocity_m_s: Optional[float]    # None when width_ns is None or threshold unset
+    transit_time_us: Optional[float]  # Δt in microseconds (width_ns / 1000)

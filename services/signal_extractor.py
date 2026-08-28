@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 import numpy as np
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 
 from instrument_app.services.daq_models import PeakRecord
 
@@ -56,6 +56,7 @@ class SignalExtractor:
         baseline_rms: float,
         time_ns: np.ndarray,
         height_threshold_v: Optional[float] = None,
+        width_rel_height: float = 0.5,
     ) -> List[PeakRecord]:
         """
         Find peaks in the (baseline-corrected) voltage trace.
@@ -75,6 +76,9 @@ class SignalExtractor:
             sigma-based rule (min_height_sigma * baseline_rms).  Use this when
             the caller knows the minimum amplitude of interest directly (e.g.
             the lowest band lower bound) rather than deriving it from noise RMS.
+        width_rel_height : float, optional
+            Fractional height (relative to peak prominence) at which to measure
+            peak width via scipy.signal.peak_widths. Default 0.5 (FWHM).
 
         Returns
         -------
@@ -94,13 +98,38 @@ class SignalExtractor:
             prominence=self.min_prominence_v,
         )
 
+        # Width measurement — uses scipy peak_widths on the same voltage array
+        sample_interval_ns = float(time_ns[1] - time_ns[0]) if len(time_ns) > 1 else 1.0
+        if len(indices) > 0:
+            widths_samp, _, left_ips, right_ips = peak_widths(
+                voltage,
+                indices,
+                rel_height=width_rel_height,
+            )
+        else:
+            widths_samp = left_ips = right_ips = np.array([])
+
         peaks = []
-        for idx in indices:
+        for i, idx in enumerate(indices):
+            if i < len(widths_samp):
+                w_samp = float(widths_samp[i])
+                w_ns = w_samp * sample_interval_ns
+                l_idx = max(0, min(int(round(float(left_ips[i]))), len(time_ns) - 1))
+                r_idx = max(0, min(int(round(float(right_ips[i]))), len(time_ns) - 1))
+                rise_ns = float(time_ns[l_idx])
+                fall_ns = float(time_ns[r_idx])
+            else:
+                w_samp = w_ns = rise_ns = fall_ns = None
+
             peaks.append(
                 PeakRecord(
                     peak_index=int(idx),
                     time_ns=float(time_ns[idx]),
                     amplitude_v=float(voltage[idx]),  # already baseline-corrected
+                    width_samples=w_samp,
+                    width_ns=w_ns,
+                    rise_ns=rise_ns,
+                    fall_ns=fall_ns,
                 )
             )
 
@@ -159,6 +188,7 @@ class SignalExtractor:
         mean_peak_spacing_ns : float or None
         spacing_variation : float or None
         peak_times_ns : list[float]
+        mean_width_ns : float or None
         """
         num_peaks = len(peaks)
         mean_peak_height_v = None
@@ -176,10 +206,14 @@ class SignalExtractor:
             mean_peak_spacing_ns = float(spacings.mean())
             cv = self.spacing_variation(spacings)
 
+        widths_ns = [p.width_ns for p in peaks if p.width_ns is not None]
+        mean_width_ns = float(np.mean(widths_ns)) if widths_ns else None
+
         return {
             "num_peaks": num_peaks,
             "mean_peak_height_v": mean_peak_height_v,
             "mean_peak_spacing_ns": mean_peak_spacing_ns,
             "spacing_variation": cv,
             "peak_times_ns": peak_times_ns,
+            "mean_width_ns": mean_width_ns,
         }

@@ -58,8 +58,9 @@ from PyQt5.QtWidgets import (
 )
 
 from instrument_app.services.daq_channels import DAQChannels
-from instrument_app.services.daq_models import AmplitudeBand, RatemeterConfig
+from instrument_app.services.daq_models import AmplitudeBand, RatemeterConfig, RatemeterEvent
 from instrument_app.services.picoscope_service import PicoScopeService
+from instrument_app.services.ratemeter_logger import RatemeterLogger
 from instrument_app.services.ratemeter_worker import RatemeterWorker
 from instrument_app.theme.style import style
 
@@ -111,6 +112,8 @@ _BAND_COLORS = [
 _PLOT_MIN_INTERVAL_S = 0.1  # 10 Hz waveform refresh cap
 _RESTART_DEBOUNCE_MS = 300
 
+_WIDTH_REL_HEIGHT_MAP = {0: 0.5, 1: 0.2, 2: 0.1}
+
 
 class RatemeterPage(QWidget):
     """Live band-rate diagnostic page."""
@@ -126,10 +129,14 @@ class RatemeterPage(QWidget):
         self._last_plot_update: float = 0.0
         self._band_lines: List[pg.InfiniteLine] = []
         self._rate_value_labels: Dict[str, QLabel] = {}
+        self._transit_pct_labels: Dict[str, QLabel] = {}
         self._trend_curves: Dict[str, pg.PlotDataItem] = {}
         self._trend_times: Dict[str, deque] = {}
         self._trend_rates: Dict[str, deque] = {}
         self._legend = None
+
+        self._logger: Optional[RatemeterLogger] = None
+        self._recording: bool = False
 
         self._settings = QSettings(_APP_ORG, _APP_NAME)
 
@@ -168,6 +175,7 @@ class RatemeterPage(QWidget):
         layout.addWidget(self._make_trigger_group())
         layout.addWidget(self._make_averaging_group())
         layout.addWidget(self._make_bands_group())
+        layout.addWidget(self._make_transit_group())
         layout.addWidget(self._make_control_group())
         layout.addStretch()
 
@@ -309,11 +317,13 @@ class RatemeterPage(QWidget):
         box = QGroupBox("Bands")
         lay = QVBoxLayout(box)
 
-        self.table_bands = QTableWidget(0, 4)
-        self.table_bands.setHorizontalHeaderLabels(["#", "Low (mV)", "High (mV)", "Color"])
+        self.table_bands = QTableWidget(0, 5)
+        self.table_bands.setHorizontalHeaderLabels(
+            ["#", "Low (mV)", "High (mV)", "Color", "Min width (ns)"]
+        )
         header = self.table_bands.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for col in (1, 2, 3):
+        for col in (1, 2, 3, 4):
             header.setSectionResizeMode(col, QHeaderView.Stretch)
         self.table_bands.setFixedHeight(160)
         self.table_bands.itemChanged.connect(self._on_band_item_changed)
@@ -350,6 +360,53 @@ class RatemeterPage(QWidget):
         lay.addWidget(self.btn_stop)
         lay.addWidget(self.lbl_status)
         lay.addWidget(self.lbl_trace_count)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        lay.addWidget(sep)
+
+        self.btn_record = QPushButton("⏺  Record Data")
+        self.btn_record.setCheckable(True)
+        self.btn_record.setEnabled(False)   # enabled only while acquisition is running
+        self.btn_record.setToolTip(
+            "Write all detected peak events to a CSV file.\n"
+            "Includes timestamp, band, amplitude, width, event type, and velocity."
+        )
+        self.btn_record.clicked.connect(self._on_record_toggled)
+        lay.addWidget(self.btn_record)
+
+        self.lbl_recording = QLabel("")
+        self.lbl_recording.setStyleSheet("color: #ef5350; font: bold 9pt;")
+        self.lbl_recording.setWordWrap(True)
+        lay.addWidget(self.lbl_recording)
+
+        return box
+
+    def _make_transit_group(self) -> QGroupBox:
+        box = QGroupBox("Transit Discrimination")
+        lay = QVBoxLayout(box)
+
+        lay.addWidget(QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]"))
+
+        lay.addWidget(QLabel("Measure width at:"))
+        self.combo_width_rel_height = QComboBox()
+        self.combo_width_rel_height.addItems([
+            "50%  (FWHM — default)",
+            "20%  (near base)",
+            "10%  (base width)",
+        ])
+        self.combo_width_rel_height.currentIndexChanged.connect(self._schedule_restart)
+        lay.addWidget(self.combo_width_rel_height)
+
+        note = QLabel(
+            "Set a minimum width in the Bands table to enable\n"
+            "transit % and velocity display for that band.\n"
+            "Signals below the threshold are counted as splat."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        lay.addWidget(note)
+
         return box
 
     def _make_right_panel(self) -> QWidget:
@@ -448,7 +505,14 @@ class RatemeterPage(QWidget):
             if item is not None:
                 item.setText(str(row + 1))
 
-    def _write_band_row(self, row: int, low_mv: float, high_mv: float, color: str) -> None:
+    def _write_band_row(
+        self,
+        row: int,
+        low_mv: float,
+        high_mv: float,
+        color: str,
+        transit_min_width_ns: Optional[float] = None,
+    ) -> None:
         num_item = QTableWidgetItem(str(row + 1))
         num_item.setFlags(num_item.flags() & ~Qt.ItemIsEditable)
         self.table_bands.setItem(row, 0, num_item)
@@ -461,8 +525,11 @@ class RatemeterPage(QWidget):
         color_item.setBackground(QColor(color))
         self.table_bands.setItem(row, 3, color_item)
 
+        width_text = f"{transit_min_width_ns:g}" if transit_min_width_ns is not None else ""
+        self.table_bands.setItem(row, 4, QTableWidgetItem(width_text))
+
     def _on_band_item_changed(self, item: QTableWidgetItem) -> None:
-        if item.column() in (1, 2):
+        if item.column() in (1, 2, 4):
             self._on_bands_changed()
 
     def _on_band_cell_double_clicked(self, row: int, col: int) -> None:
@@ -492,7 +559,15 @@ class RatemeterPage(QWidget):
                 high = 0.0
             color_item = self.table_bands.item(row, 3)
             color = (color_item.data(Qt.UserRole) if color_item else None) or _BAND_COLORS[0]
-            bands.append(AmplitudeBand(label=label, low_mv=low, high_mv=high, color=color))
+            try:
+                w_text = self.table_bands.item(row, 4).text().strip()
+                transit_min_width_ns = float(w_text) if w_text else None
+            except (AttributeError, ValueError):
+                transit_min_width_ns = None
+            bands.append(AmplitudeBand(
+                label=label, low_mv=low, high_mv=high, color=color,
+                transit_min_width_ns=transit_min_width_ns,
+            ))
         return bands
 
     def _on_bands_changed(self) -> None:
@@ -527,8 +602,15 @@ class RatemeterPage(QWidget):
     def _rebuild_rate_rows(self, bands: List[AmplitudeBand]) -> None:
         self._clear_layout(self.rates_layout)
         self._rate_value_labels = {}
+        self._transit_pct_labels = {}
+
         for band in bands:
-            row = QHBoxLayout()
+            band_widget = QWidget()
+            vlay = QVBoxLayout(band_widget)
+            vlay.setSpacing(2)
+            vlay.setContentsMargins(0, 4, 0, 4)
+
+            top_row = QHBoxLayout()
             swatch = QLabel()
             swatch.setFixedSize(14, 14)
             swatch.setStyleSheet(f"background: {band.color}; border-radius: 3px;")
@@ -539,15 +621,22 @@ class RatemeterPage(QWidget):
             rate_label = QLabel("0.0 Hz")
             rate_label.setStyleSheet(f"color: {band.color}; font: bold 18pt 'Consolas';")
 
-            row.addWidget(swatch)
-            row.addWidget(text)
-            row.addStretch()
-            row.addWidget(rate_label)
+            top_row.addWidget(swatch)
+            top_row.addWidget(text)
+            top_row.addStretch()
+            top_row.addWidget(rate_label)
+            vlay.addLayout(top_row)
 
-            container = QWidget()
-            container.setLayout(row)
-            self.rates_layout.addWidget(container)
+            # Second row — transit % and velocity (empty when threshold not set)
+            pct_label = QLabel("")
+            pct_label.setStyleSheet(
+                f"color: {style.TXT_MUTED}; font: 10pt 'Consolas'; padding-left: 22px;"
+            )
+            vlay.addWidget(pct_label)
+
+            self.rates_layout.addWidget(band_widget)
             self._rate_value_labels[band.label] = rate_label
+            self._transit_pct_labels[band.label] = pct_label
 
     def _rebuild_trend_plot(self, bands: List[AmplitudeBand]) -> None:
         for curve in self._trend_curves.values():
@@ -654,6 +743,9 @@ class RatemeterPage(QWidget):
 
     def stop_acquisition(self) -> None:
         """Stop the worker gracefully. Safe to call even if not running."""
+        self._stop_recording()
+        self.btn_record.setChecked(False)
+
         if self._worker is None:
             return
 
@@ -681,7 +773,34 @@ class RatemeterPage(QWidget):
         self._worker.error_occurred.connect(self._on_error)
         self._worker.status_update.connect(self._on_status)
         self._worker.trace_count_changed.connect(self._on_trace_count)
+        self._worker.peak_event.connect(self._on_peak_event)
         self._worker.start()
+
+    def _on_peak_event(self, event: RatemeterEvent) -> None:
+        """Route peak events to the logger when recording is active."""
+        if self._recording and self._logger:
+            self._logger.save_event(event)
+
+    def _on_record_toggled(self, checked: bool) -> None:
+        if checked:
+            self._start_recording()
+        else:
+            self._stop_recording()
+
+    def _start_recording(self) -> None:
+        run_id = RatemeterLogger.make_run_id()
+        self._logger = RatemeterLogger(RatemeterLogger.default_base_dir(), run_id)
+        self._recording = True
+        self.btn_record.setText("⏹  Stop Recording")
+        self.lbl_recording.setText(f"● REC  {self._logger.path.name}")
+
+    def _stop_recording(self) -> None:
+        if self._logger:
+            self._logger.close()
+            self._logger = None
+        self._recording = False
+        self.btn_record.setText("⏺  Record Data")
+        self.lbl_recording.setText("")
 
     def _restart_worker(self) -> None:
         if self._worker is None:
@@ -740,13 +859,39 @@ class RatemeterPage(QWidget):
         voltage_mv = record.voltage * 1000
         self._plot_item.setData(time_us, voltage_mv)
 
-    def _on_rates_updated(self, rates: Dict[str, float]) -> None:
+    def _on_rates_updated(self, payload: dict) -> None:
         now = time.monotonic()
         trend_window_s = self.spin_trend_window.value()
+
+        rates = payload["rates"]
+        fractions = payload["fractions"]
+        velocities = payload["velocities"]
 
         for label, hz in rates.items():
             if label in self._rate_value_labels:
                 self._rate_value_labels[label].setText(f"{hz:.1f} Hz")
+
+            pct_label = self._transit_pct_labels.get(label)
+            if pct_label is not None:
+                fraction = fractions.get(label)    # None when threshold not set
+                avg_vel = velocities.get(label)     # None when no transit events yet
+                if fraction is not None:
+                    splat_pct = 100.0 - fraction
+                    if avg_vel is not None:
+                        vel_str = (
+                            f"~{avg_vel / 1000:.2f} km/s"
+                            if avg_vel >= 1000
+                            else f"~{avg_vel:.0f} m/s"
+                        )
+                        pct_label.setText(
+                            f"↳  {splat_pct:.1f}% splat  ·  {fraction:.1f}% transit  ({vel_str})"
+                        )
+                    else:
+                        pct_label.setText(
+                            f"↳  {splat_pct:.1f}% splat  ·  {fraction:.1f}% transit"
+                        )
+                else:
+                    pct_label.setText("")
 
             dq_t = self._trend_times.get(label)
             dq_r = self._trend_rates.get(label)
@@ -793,6 +938,9 @@ class RatemeterPage(QWidget):
     def _build_config(self) -> RatemeterConfig:
         voltage_range_v = _VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02)
         sample_interval_ns = _SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200)
+        width_rel_height = _WIDTH_REL_HEIGHT_MAP.get(
+            self.combo_width_rel_height.currentIndex(), 0.5
+        )
         return RatemeterConfig(
             channel=self.combo_channel.currentText(),
             voltage_range_v=voltage_range_v,
@@ -801,6 +949,8 @@ class RatemeterPage(QWidget):
             window_duration_ms=self.spin_window.value(),
             rate_averaging_s=float(self.spin_rate_avg.value()),
             bands=self._bands_from_table(),
+            electrode_length_m=0.03302,
+            width_rel_height=width_rel_height,
         )
 
     def _trigger_direction_value(self) -> str:
@@ -816,12 +966,14 @@ class RatemeterPage(QWidget):
         self.btn_disconnect.setEnabled(connected)
         self.btn_start.setEnabled(connected and not self._daq_busy)
         self.btn_stop.setEnabled(False)
+        self.btn_record.setEnabled(False)
 
     def _set_controls_running(self) -> None:
         self.btn_connect.setEnabled(False)
         self.btn_disconnect.setEnabled(False)
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+        self.btn_record.setEnabled(True)
 
     @staticmethod
     def _set_label_good(label: QLabel, text: str) -> None:
@@ -860,6 +1012,9 @@ class RatemeterPage(QWidget):
         self.spin_trigger_auto.setValue(s.value("ratemeter/trigger_auto_ms", 1000, type=int))
         self.spin_rate_avg.setValue(s.value("ratemeter/rate_averaging_s", 10, type=int))
         self.spin_trend_window.setValue(s.value("ratemeter/trend_window_s", 60, type=int))
+        self.combo_width_rel_height.setCurrentIndex(
+            s.value("ratemeter/width_rel_height_idx", 0, type=int)
+        )
 
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
@@ -884,7 +1039,8 @@ class RatemeterPage(QWidget):
             except (TypeError, ValueError):
                 low, high = 0.0, 0.0
             color = entry.get("color") or _BAND_COLORS[i % len(_BAND_COLORS)]
-            self._write_band_row(row, low, high, color)
+            transit_min_width_ns = entry.get("transit_min_width_ns")  # None if absent or null
+            self._write_band_row(row, low, high, color, transit_min_width_ns)
         self.table_bands.blockSignals(False)
 
     @staticmethod
@@ -906,9 +1062,16 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/trigger_auto_ms", self.spin_trigger_auto.value())
         s.setValue("ratemeter/rate_averaging_s", self.spin_rate_avg.value())
         s.setValue("ratemeter/trend_window_s", self.spin_trend_window.value())
+        s.setValue("ratemeter/width_rel_height_idx", self.combo_width_rel_height.currentIndex())
 
         bands = [
-            {"label": b.label, "low_mv": b.low_mv, "high_mv": b.high_mv, "color": b.color}
+            {
+                "label": b.label,
+                "low_mv": b.low_mv,
+                "high_mv": b.high_mv,
+                "color": b.color,
+                "transit_min_width_ns": b.transit_min_width_ns,
+            }
             for b in self._bands_from_table()
         ]
         s.setValue("ratemeter/bands", json.dumps(bands))
