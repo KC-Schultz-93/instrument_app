@@ -11,6 +11,7 @@ class Theme:
     BG_QSS: str       # optional gradient (right-hand side of a CSS value)
     TXT: str
     TXT_STRONG: str
+    TXT_MUTED: str    # de-emphasised text (~60% brightness of TXT)
     CARD_BG: str
     CARD_BORDER: str
     BTN_BG: str
@@ -25,7 +26,7 @@ class Theme:
 
 DARK = Theme(
     BG="#0f1b22", BG_QSS="",
-    TXT="#EAF2FF", TXT_STRONG="#FFFFFF",
+    TXT="#EAF2FF", TXT_STRONG="#FFFFFF", TXT_MUTED="#8aafc5",
     CARD_BG="#132530", CARD_BORDER="#1f3642",
     BTN_BG="#142a36", BTN_BG_DOWN="#0e2029", BTN_BORDER="#224050",
     GOOD="#2ecc71", BAD="#ff4136", GRAY="#7f8c8d",
@@ -34,7 +35,7 @@ DARK = Theme(
 
 LIGHT = Theme(
     BG="#f6f8fb", BG_QSS="",
-    TXT="#17212b", TXT_STRONG="#0b1117",
+    TXT="#17212b", TXT_STRONG="#0b1117", TXT_MUTED="#6b7c8e",
     CARD_BG="#ffffff", CARD_BORDER="#d5dde6",
     BTN_BG="#eef2f7", BTN_BG_DOWN="#e2e8f0", BTN_BORDER="#cbd5e1",
     GOOD="#1f9d55", BAD="#cc2936", GRAY="#8a99a6",
@@ -47,7 +48,7 @@ SUBMARINE = Theme(
     BG="#0b1f26",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #0a1a21, stop:0.45 #093340, stop:1 #0a4a5b)"),
-    TXT="#E8FAFF", TXT_STRONG="#FFFFFF",
+    TXT="#E8FAFF", TXT_STRONG="#FFFFFF", TXT_MUTED="#B8C7D3",
     CARD_BG="#0e2a35", CARD_BORDER="#1f4653",
     BTN_BG="#123845", BTN_BG_DOWN="#0c2b35", BTN_BORDER="#245b6b",
     GOOD="#2ee6a6", BAD="#ff5a6b", GRAY="#7fa0a8",
@@ -60,7 +61,7 @@ NEON_LIGHTS = Theme(
     BG="#0e1822",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #0E1B24, stop:0.45 #14324A, stop:1 #2B1950)"),
-    TXT="#E9F5FF", TXT_STRONG="#FFFFFF",
+    TXT="#E9F5FF", TXT_STRONG="#FFFFFF", TXT_MUTED="#7a9fb5",
     CARD_BG="#112836", CARD_BORDER="#1e3e51",
     BTN_BG="#16364A", BTN_BG_DOWN="#0f2735", BTN_BORDER="#28556e",
     GOOD="#2ee6a6", BAD="#ff5a87", GRAY="#7f8c8d",
@@ -71,7 +72,7 @@ CHROMA_GLOW = Theme(
     BG="#0b1220",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #0B1220, stop:0.35 #0d2b52, stop:0.7 #3c1f69, stop:1 #6e1448)"),
-    TXT="#EAF2FF", TXT_STRONG="#FFFFFF",
+    TXT="#EAF2FF", TXT_STRONG="#FFFFFF", TXT_MUTED="#7a94aa",
     CARD_BG="#0f2134", CARD_BORDER="#244466",
     BTN_BG="#12385a", BTN_BG_DOWN="#0e2b45", BTN_BORDER="#2a5e8b",
     GOOD="#38e6b5", BAD="#ff4d7a", GRAY="#8aa0b3",
@@ -84,7 +85,7 @@ EMBER = Theme(
     BG="#16141f",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #16141f, stop:0.5 #1e1e2c, stop:1 #2a1a10)"),
-    TXT="#FFF0E8", TXT_STRONG="#FFFFFF",
+    TXT="#FFF0E8", TXT_STRONG="#FFFFFF", TXT_MUTED="#a09080",
     CARD_BG="#1e1c28", CARD_BORDER="#3d2e1e",
     BTN_BG="#2a2030", BTN_BG_DOWN="#1e1828", BTN_BORDER="#5a3a22",
     GOOD="#34b1aa", BAD="#ff5a6b", GRAY="#8a7f7f",
@@ -97,7 +98,7 @@ VIOLET = Theme(
     BG="#0e0a1a",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #0e0a1a, stop:0.45 #1a1040, stop:1 #0d1f4a)"),
-    TXT="#EAE8FF", TXT_STRONG="#FFFFFF",
+    TXT="#EAE8FF", TXT_STRONG="#FFFFFF", TXT_MUTED="#8a84b0",
     CARD_BG="#140f2a", CARD_BORDER="#2e1f6e",
     BTN_BG="#1c1438", BTN_BG_DOWN="#140f2a", BTN_BORDER="#3d2a8a",
     GOOD="#0dcaf0", BAD="#ff4d7a", GRAY="#8a80a8",
@@ -110,7 +111,7 @@ HAZARD = Theme(
     BG="#0f0c00",
     BG_QSS=("qlineargradient(x1:0, y1:0, x2:0, y2:1, "
             "stop:0 #0f0c00, stop:0.5 #1a1500, stop:1 #261e00)"),
-    TXT="#FFF8DC", TXT_STRONG="#FFFFFF",
+    TXT="#FFF8DC", TXT_STRONG="#FFFFFF", TXT_MUTED="#a09868",
     CARD_BG="#1a1600", CARD_BORDER="#3d3000",
     BTN_BG="#231d00", BTN_BG_DOWN="#1a1500", BTN_BORDER="#5a4600",
     GOOD="#e0b50f", BAD="#ff4136", GRAY="#8a8060",
