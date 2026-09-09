@@ -19,7 +19,7 @@ from __future__ import annotations
 import ctypes
 import time
 from datetime import datetime
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 
@@ -147,6 +147,13 @@ class PicoScopeService:
                 range_enum if ch == channel_enum else 7,
             )
             self._check_status(status, f"ps4000SetChannel(ch={ch})")
+
+        # 200 kHz bandwidth limiter — PS4000_4262 only. Simple per-channel
+        # enable/disable, no filter-level enum.
+        status = ps.ps4000SetBwFilter(
+            self._handle, channel_enum, 1 if config.bandwidth_limit_enabled else 0
+        )
+        self._check_status(status, "ps4000SetBwFilter")
 
     def get_timebase(self, config: AcquisitionConfig) -> Tuple[int, int]:
         """
@@ -328,6 +335,132 @@ class PicoScopeService:
             config=config,
             metadata=metadata,
         )
+
+    def run_rapid_block(self, config: AcquisitionConfig, n_captures: int) -> List[WaveformRecord]:
+        """
+        Run one rapid-block (segmented memory) acquisition round, capturing
+        n_captures triggered waveforms in a single RunBlock round-trip.
+        BLOCKING — call from a worker thread.
+
+        Raises ValueError if config.num_samples does not fit within the
+        max samples per segment reported by ps4000MemorySegments for the
+        requested n_captures (caller should reduce capture length or
+        n_captures rather than expect silent truncation).
+        """
+        ps = self._get_ps()
+        timestamp = datetime.now()
+
+        post_samples = config.num_samples - config.pre_trigger_samples
+        timebase_index, actual_interval_ns = self.get_timebase(config)
+        channel_enum = _CHANNEL_MAP[config.channel.upper()]
+
+        # Cancel any leftover acquisition from a previous cycle or stale state,
+        # same defensive call as run_block.
+        ps.ps4000Stop(self._handle)
+
+        # Reserve segmented memory and check the requested trace length fits.
+        max_samples = ctypes.c_int32(0)
+        status = ps.ps4000MemorySegments(
+            self._handle, n_captures, ctypes.byref(max_samples)
+        )
+        self._check_status(status, "ps4000MemorySegments")
+        if config.num_samples > max_samples.value:
+            raise ValueError(
+                f"config.num_samples ({config.num_samples}) exceeds the "
+                f"{max_samples.value} samples/segment available when splitting "
+                f"scope memory into {n_captures} segments. Reduce the capture "
+                f"length or the number of captures per batch."
+            )
+
+        status = ps.ps4000SetNoOfCaptures(self._handle, n_captures)
+        self._check_status(status, "ps4000SetNoOfCaptures")
+
+        # Allocate one int16 buffer per segment and register each with the
+        # driver via SetDataBufferBulk (the rapid-block counterpart to the
+        # single-capture path's SetDataBuffers). All buffers must stay alive
+        # until GetValuesBulk completes.
+        buffers = [(ctypes.c_int16 * config.num_samples)() for _ in range(n_captures)]
+        for segment_index, buffer in enumerate(buffers):
+            status = ps.ps4000SetDataBufferBulk(
+                self._handle,
+                channel_enum,
+                ctypes.byref(buffer),
+                config.num_samples,
+                segment_index,
+            )
+            self._check_status(status, f"ps4000SetDataBufferBulk(segment={segment_index})")
+
+        # RunBlock — called once; the device fills all n_captures segments
+        # from consecutive trigger events internally.
+        time_indisposed = ctypes.c_int32(0)
+        status = ps.ps4000RunBlock(
+            self._handle,
+            config.pre_trigger_samples,
+            post_samples,
+            timebase_index,
+            1,                              # oversample = 1
+            ctypes.byref(time_indisposed),
+            0,                              # segmentIndex
+            None,                           # lpReady callback (use polling)
+            None,                           # pParameter
+        )
+        self._check_status(status, "ps4000RunBlock")
+
+        # Poll until ready — identical pattern to run_block.
+        ready = ctypes.c_int16(0)
+        for _ in range(100_000):
+            status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
+            self._check_status(status, "ps4000IsReady")
+            if ready.value:
+                break
+            time.sleep(0.001)
+        else:
+            raise RuntimeError("PicoScope: run_rapid_block timed out waiting for ready.")
+
+        n_samples = ctypes.c_uint32(config.num_samples)
+        overflow = (ctypes.c_int16 * n_captures)()
+        status = ps.ps4000GetValuesBulk(
+            self._handle,
+            ctypes.byref(n_samples),
+            0,                              # fromSegmentIndex
+            n_captures - 1,                 # toSegmentIndex
+            ctypes.byref(overflow),
+        )
+        self._check_status(status, "ps4000GetValuesBulk")
+
+        ps.ps4000Stop(self._handle)
+
+        n = n_samples.value
+        time_ns = np.arange(n, dtype=np.float64) * actual_interval_ns
+
+        records: List[WaveformRecord] = []
+        for segment_index, buffer in enumerate(buffers):
+            raw = np.frombuffer(buffer, dtype=np.int16, count=n).astype(np.float64)
+
+            voltage = raw / _ADC_MAX * config.voltage_range_v
+            if config.invert_polarity:
+                voltage = -voltage
+
+            metadata: dict = {
+                "actual_interval_ns": actual_interval_ns,
+                "timebase_index": timebase_index,
+                "overflow": bool(overflow[segment_index]),
+                "n_values": n,
+                "segment_index": segment_index,
+            }
+
+            records.append(WaveformRecord(
+                trace_id=0,             # caller sets this
+                run_id="",              # caller sets this
+                timestamp=timestamp,
+                voltage=voltage,
+                time_ns=time_ns,
+                sample_interval_ns=actual_interval_ns,
+                config=config,
+                metadata=metadata,
+            ))
+
+        return records
 
     # ------------------------------------------------------------------
     # Internal helpers

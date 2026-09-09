@@ -43,6 +43,7 @@ class RatemeterWorker(QThread):
         trigger_enabled: bool,
         trigger_threshold_v: float,
         trigger_direction: str,
+        captures_per_batch: int = 1,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -51,6 +52,7 @@ class RatemeterWorker(QThread):
         self._acq_config = config.to_acquisition_config(
             trigger_enabled, trigger_threshold_v, trigger_direction
         )
+        self._captures_per_batch = max(1, captures_per_batch)
         self._extractor = SignalExtractor()
         self._stop_flag = False
         self._trace_id = 0
@@ -68,74 +70,18 @@ class RatemeterWorker(QThread):
         self._loop_start = time.monotonic()
         try:
             while not self._stop_flag:
-                record = self._service.run_block(self._acq_config)
-                self._trace_id += 1
+                if self._captures_per_batch <= 1:
+                    records = [self._service.run_block(self._acq_config)]
+                else:
+                    records = self._service.run_rapid_block(
+                        self._acq_config, self._captures_per_batch
+                    )
 
-                baseline_mean, baseline_rms = WaveformProcessor.estimate_baseline(record.voltage)
-                corrected = WaveformProcessor.subtract_baseline(record.voltage, baseline_mean)
-
-                # Use the lowest band boundary (×0.9) as the height threshold so
-                # any peak that could fall in a band is detected.  A sigma-based
-                # threshold would be set at the signal amplitude for continuous
-                # signals (no quiet pre-trigger baseline), silencing all peaks.
-                min_band_v = (
-                    min(b.low_mv for b in self._config.bands) / 1000.0
-                    if self._config.bands else None
-                )
-                height_override = min_band_v * 0.9 if min_band_v else None
-
-                peaks = self._extractor.find_peaks(
-                    corrected, baseline_mean, baseline_rms, record.time_ns,
-                    height_threshold_v=height_override,
-                    width_rel_height=self._config.width_rel_height,
-                )
+                for record in records:
+                    self._trace_id += 1
+                    self._process_record(record)
 
                 now = time.monotonic()
-                now_dt = datetime.now()
-                L = self._config.electrode_length_m
-
-                for band in self._config.bands:
-                    dq = self._hit_times[band.label]
-                    transit_dq = self._transit_times[band.label]
-                    vel_dq = self._recent_velocities[band.label]
-
-                    for peak in peaks:
-                        amp_mv = peak.amplitude_v * 1000.0
-                        if not (band.low_mv <= amp_mv <= band.high_mv):
-                            continue
-
-                        dq.append(now)
-                        w_ns = peak.width_ns
-
-                        if band.transit_min_width_ns is None:
-                            event_type = "unknown"
-                            velocity = None
-                            transit_us = None
-                        elif w_ns is not None and w_ns >= band.transit_min_width_ns:
-                            event_type = "transit"
-                            transit_us = w_ns / 1000.0
-                            velocity = L / (w_ns * 1e-9) if w_ns > 0 else None
-                            transit_dq.append(now)
-                            if velocity is not None:
-                                vel_dq.append((now, velocity))
-                        else:
-                            event_type = "splat"
-                            transit_us = None
-                            velocity = None
-
-                        self.peak_event.emit(RatemeterEvent(
-                            timestamp=now_dt,
-                            band_label=band.label,
-                            amplitude_mv=amp_mv,
-                            width_ns=w_ns,
-                            event_type=event_type,
-                            velocity_m_s=velocity,
-                            transit_time_us=transit_us,
-                        ))
-
-                self.waveform_ready.emit(record)
-                self.trace_count_changed.emit(self._trace_id)
-
                 if now - self._last_rate_emit >= self._RATE_EMIT_INTERVAL_S:
                     self._last_rate_emit = now
                     self.rates_updated.emit(self._compute_rates(now))
@@ -144,6 +90,72 @@ class RatemeterWorker(QThread):
             return
 
         self.status_update.emit("Stopped")
+
+    def _process_record(self, record) -> None:
+        baseline_mean, baseline_rms = WaveformProcessor.estimate_baseline(record.voltage)
+        corrected = WaveformProcessor.subtract_baseline(record.voltage, baseline_mean)
+
+        # Use the lowest band boundary (×0.9) as the height threshold so
+        # any peak that could fall in a band is detected.  A sigma-based
+        # threshold would be set at the signal amplitude for continuous
+        # signals (no quiet pre-trigger baseline), silencing all peaks.
+        min_band_v = (
+            min(b.low_mv for b in self._config.bands) / 1000.0
+            if self._config.bands else None
+        )
+        height_override = min_band_v * 0.9 if min_band_v else None
+
+        peaks = self._extractor.find_peaks(
+            corrected, baseline_mean, baseline_rms, record.time_ns,
+            height_threshold_v=height_override,
+            width_rel_height=self._config.width_rel_height,
+        )
+
+        now = time.monotonic()
+        now_dt = datetime.now()
+        L = self._config.electrode_length_m
+
+        for band in self._config.bands:
+            dq = self._hit_times[band.label]
+            transit_dq = self._transit_times[band.label]
+            vel_dq = self._recent_velocities[band.label]
+
+            for peak in peaks:
+                amp_mv = peak.amplitude_v * 1000.0
+                if not (band.low_mv <= amp_mv <= band.high_mv):
+                    continue
+
+                dq.append(now)
+                w_ns = peak.width_ns
+
+                if band.transit_min_width_ns is None:
+                    event_type = "unknown"
+                    velocity = None
+                    transit_us = None
+                elif w_ns is not None and w_ns >= band.transit_min_width_ns:
+                    event_type = "transit"
+                    transit_us = w_ns / 1000.0
+                    velocity = L / (w_ns * 1e-9) if w_ns > 0 else None
+                    transit_dq.append(now)
+                    if velocity is not None:
+                        vel_dq.append((now, velocity))
+                else:
+                    event_type = "splat"
+                    transit_us = None
+                    velocity = None
+
+                self.peak_event.emit(RatemeterEvent(
+                    timestamp=now_dt,
+                    band_label=band.label,
+                    amplitude_mv=amp_mv,
+                    width_ns=w_ns,
+                    event_type=event_type,
+                    velocity_m_s=velocity,
+                    transit_time_us=transit_us,
+                ))
+
+        self.waveform_ready.emit(record)
+        self.trace_count_changed.emit(self._trace_id)
 
     def _compute_rates(self, now: float) -> dict:
         cutoff = now - self._config.rate_averaging_s

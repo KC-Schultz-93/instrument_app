@@ -253,6 +253,17 @@ class RatemeterPage(QWidget):
         self.combo_coupling.currentIndexChanged.connect(self._schedule_restart)
         lay.addWidget(self.combo_coupling)
 
+        self.chk_bandwidth_limit = QCheckBox("200 kHz bandwidth limit")
+        self.chk_bandwidth_limit.stateChanged.connect(self._schedule_restart)
+        lay.addWidget(self.chk_bandwidth_limit)
+
+        lay.addWidget(QLabel("Captures per batch:"))
+        self.spin_captures_per_batch = QSpinBox()
+        self.spin_captures_per_batch.setRange(1, 1000)
+        self.spin_captures_per_batch.setValue(1)
+        self.spin_captures_per_batch.valueChanged.connect(self._schedule_restart)
+        lay.addWidget(self.spin_captures_per_batch)
+
         return box
 
     def _make_trigger_group(self) -> QGroupBox:
@@ -766,7 +777,8 @@ class RatemeterPage(QWidget):
         trigger_direction = self._trigger_direction_value()
 
         self._worker = RatemeterWorker(
-            self._service, config, trigger_enabled, trigger_threshold_v, trigger_direction
+            self._service, config, trigger_enabled, trigger_threshold_v, trigger_direction,
+            captures_per_batch=self.spin_captures_per_batch.value(),
         )
         self._worker.rates_updated.connect(self._on_rates_updated)
         self._worker.waveform_ready.connect(self._on_waveform_ready)
@@ -951,6 +963,7 @@ class RatemeterPage(QWidget):
             bands=self._bands_from_table(),
             electrode_length_m=0.03302,
             width_rel_height=width_rel_height,
+            bandwidth_limit_enabled=self.chk_bandwidth_limit.isChecked(),
         )
 
     def _trigger_direction_value(self) -> str:
@@ -1015,6 +1028,12 @@ class RatemeterPage(QWidget):
         self.combo_width_rel_height.setCurrentIndex(
             s.value("ratemeter/width_rel_height_idx", 0, type=int)
         )
+        self.chk_bandwidth_limit.setChecked(
+            s.value("ratemeter/bandwidth_limit_enabled", False, type=bool)
+        )
+        self.spin_captures_per_batch.setValue(
+            s.value("ratemeter/captures_per_batch", 1, type=int)
+        )
 
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
@@ -1063,6 +1082,8 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/rate_averaging_s", self.spin_rate_avg.value())
         s.setValue("ratemeter/trend_window_s", self.spin_trend_window.value())
         s.setValue("ratemeter/width_rel_height_idx", self.combo_width_rel_height.currentIndex())
+        s.setValue("ratemeter/bandwidth_limit_enabled", self.chk_bandwidth_limit.isChecked())
+        s.setValue("ratemeter/captures_per_batch", self.spin_captures_per_batch.value())
 
         bands = [
             {

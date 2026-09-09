@@ -34,6 +34,7 @@ class AcquisitionConfig:
     pre_trigger_samples: int = 0        # samples captured before trigger point
 
     invert_polarity: bool = False       # negate voltage after ADC conversion
+    bandwidth_limit_enabled: bool = False   # PS4000 200 kHz bandwidth limiter (4262 only)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +175,7 @@ class RatemeterConfig:
     bands: List[AmplitudeBand]
     electrode_length_m: float = 0.03302   # 1.3 inches — pickup electrode length
     width_rel_height: float = 0.5         # fractional height for peak_widths (0.5 = FWHM)
+    bandwidth_limit_enabled: bool = False   # PS4000 200 kHz bandwidth limiter (4262 only)
 
     @property
     def num_samples(self) -> int:
@@ -194,6 +196,7 @@ class RatemeterConfig:
             trigger_enabled=trigger_enabled,
             trigger_threshold_v=trigger_threshold_v,
             trigger_direction=trigger_direction,
+            bandwidth_limit_enabled=self.bandwidth_limit_enabled,
         )
 
 
