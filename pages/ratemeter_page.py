@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import pyqtgraph as pg
@@ -39,12 +40,14 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -58,11 +61,19 @@ from PyQt5.QtWidgets import (
 )
 
 from instrument_app.services.daq_channels import DAQChannels
-from instrument_app.services.daq_models import AmplitudeBand, RatemeterConfig, RatemeterEvent
+from instrument_app.services.daq_models import (
+    AmplitudeBand,
+    PeakRecord,
+    RatemeterConfig,
+    RatemeterEvent,
+    TimedRecordingSummary,
+)
 from instrument_app.services.picoscope_service import PicoScopeService
 from instrument_app.services.ratemeter_logger import RatemeterLogger
 from instrument_app.services.ratemeter_worker import RatemeterWorker
+from instrument_app.services.timed_recording_logger import TimedRecordingLogger
 from instrument_app.theme.style import style
+from instrument_app.ui import CollapsibleBox
 
 
 # Same org/app identity as app/main.py's QSettings(APP_ORG, APP_NAME).
@@ -115,6 +126,59 @@ _RESTART_DEBOUNCE_MS = 300
 _WIDTH_REL_HEIGHT_MAP = {0: 0.5, 1: 0.2, 2: 0.1}
 
 
+class TimedRecordingMetadataDialog(QDialog):
+    """Prompts for run metadata after a timed-recording window completes."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Timed Recording - Run Metadata")
+        self.setModal(True)
+
+        v = QVBoxLayout(self)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Description:"))
+        self.edit_description = QLineEdit()
+        row1.addWidget(self.edit_description, 1)
+        v.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Vpp (V):"))
+        self.spin_vpp = QDoubleSpinBox()
+        self.spin_vpp.setRange(0.0, 10000.0)
+        self.spin_vpp.setDecimals(4)
+        row2.addWidget(self.spin_vpp, 1)
+        v.addLayout(row2)
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Frequency (Hz):"))
+        self.spin_frequency = QDoubleSpinBox()
+        self.spin_frequency.setRange(0.0, 1e9)
+        self.spin_frequency.setDecimals(4)
+        row3.addWidget(self.spin_frequency, 1)
+        v.addLayout(row3)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        self.btn_save = QPushButton("Save")
+        self.btn_cancel = QPushButton("Cancel")
+        btn_row.addWidget(self.btn_save)
+        btn_row.addWidget(self.btn_cancel)
+        v.addLayout(btn_row)
+
+        self.btn_save.clicked.connect(self.accept)
+        self.btn_cancel.clicked.connect(self.reject)
+
+    def description(self) -> str:
+        return self.edit_description.text().strip()
+
+    def vpp(self) -> float:
+        return self.spin_vpp.value()
+
+    def frequency_hz(self) -> float:
+        return self.spin_frequency.value()
+
+
 class RatemeterPage(QWidget):
     """Live band-rate diagnostic page."""
 
@@ -138,11 +202,20 @@ class RatemeterPage(QWidget):
         self._logger: Optional[RatemeterLogger] = None
         self._recording: bool = False
 
+        self._timed_recording_running: bool = False
+        self._timed_recording_id: Optional[str] = None
+        self._timed_recording_started_at: Optional[datetime] = None
+        self._timed_peak_buffer: List[PeakRecord] = []
+
         self._settings = QSettings(_APP_ORG, _APP_NAME)
 
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.timeout.connect(self._restart_worker)
+
+        self._timed_recording_timer = QTimer(self)
+        self._timed_recording_timer.setSingleShot(True)
+        self._timed_recording_timer.timeout.connect(self._on_timed_recording_elapsed)
 
         self._build_ui()
         self._load_settings()
@@ -171,11 +244,18 @@ class RatemeterPage(QWidget):
         layout.setSpacing(8)
 
         layout.addWidget(self._make_connection_group())
-        layout.addWidget(self._make_acquisition_group())
-        layout.addWidget(self._make_trigger_group())
-        layout.addWidget(self._make_averaging_group())
-        layout.addWidget(self._make_bands_group())
-        layout.addWidget(self._make_transit_group())
+
+        self._collapsible_sections: Dict[str, CollapsibleBox] = {
+            "acquisition": self._make_acquisition_group(),
+            "trigger": self._make_trigger_group(),
+            "averaging": self._make_averaging_group(),
+            "bands": self._make_bands_group(),
+            "transit": self._make_transit_group(),
+        }
+        for key, box in self._collapsible_sections.items():
+            layout.addWidget(box)
+            box.toggled.connect(lambda _checked, k=key: self._save_settings())
+
         layout.addWidget(self._make_control_group())
         layout.addStretch()
 
@@ -213,9 +293,9 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_acquisition_group(self) -> QGroupBox:
-        box = QGroupBox("Acquisition")
-        lay = QVBoxLayout(box)
+    def _make_acquisition_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Acquisition")
+        lay = box.content_layout
 
         lay.addWidget(QLabel("Channel:"))
         self.combo_channel = QComboBox()
@@ -266,9 +346,9 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_trigger_group(self) -> QGroupBox:
-        box = QGroupBox("Trigger")
-        lay = QVBoxLayout(box)
+    def _make_trigger_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Trigger")
+        lay = box.content_layout
 
         self.chk_trigger_enable = QCheckBox("Enable")
         self.chk_trigger_enable.stateChanged.connect(self._on_trigger_enabled_changed)
@@ -304,9 +384,9 @@ class RatemeterPage(QWidget):
         self.spin_trigger_auto.setEnabled(enabled)
         return box
 
-    def _make_averaging_group(self) -> QGroupBox:
-        box = QGroupBox("Averaging")
-        lay = QVBoxLayout(box)
+    def _make_averaging_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Averaging")
+        lay = box.content_layout
 
         lay.addWidget(QLabel("Rate averaging window (s):"))
         self.spin_rate_avg = QSpinBox()
@@ -324,9 +404,9 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_bands_group(self) -> QGroupBox:
-        box = QGroupBox("Bands")
-        lay = QVBoxLayout(box)
+    def _make_bands_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Bands")
+        lay = box.content_layout
 
         self.table_bands = QTableWidget(0, 5)
         self.table_bands.setHorizontalHeaderLabels(
@@ -391,11 +471,38 @@ class RatemeterPage(QWidget):
         self.lbl_recording.setWordWrap(True)
         lay.addWidget(self.lbl_recording)
 
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        lay.addWidget(sep2)
+
+        dur_row = QHBoxLayout()
+        dur_row.addWidget(QLabel("Timed recording duration (s):"))
+        self.spin_timed_duration = QSpinBox()
+        self.spin_timed_duration.setRange(1, 3600)
+        self.spin_timed_duration.setValue(30)
+        dur_row.addWidget(self.spin_timed_duration)
+        lay.addLayout(dur_row)
+
+        self.btn_timed_record = QPushButton("⏱  Timed Recording")
+        self.btn_timed_record.setEnabled(False)   # enabled only while acquisition is running
+        self.btn_timed_record.setToolTip(
+            "Capture every detected peak's raw amplitude for a fixed duration,\n"
+            "then prompt for run metadata (description, Vpp, frequency) before saving.\n"
+            "Live waveform plotting pauses during capture."
+        )
+        self.btn_timed_record.clicked.connect(self._on_timed_record_clicked)
+        lay.addWidget(self.btn_timed_record)
+
+        self.lbl_timed_recording = QLabel("")
+        self.lbl_timed_recording.setStyleSheet("color: #29b6f6; font: bold 9pt;")
+        self.lbl_timed_recording.setWordWrap(True)
+        lay.addWidget(self.lbl_timed_recording)
+
         return box
 
-    def _make_transit_group(self) -> QGroupBox:
-        box = QGroupBox("Transit Discrimination")
-        lay = QVBoxLayout(box)
+    def _make_transit_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Transit Discrimination")
+        lay = box.content_layout
 
         lay.addWidget(QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]"))
 
@@ -756,6 +863,7 @@ class RatemeterPage(QWidget):
         """Stop the worker gracefully. Safe to call even if not running."""
         self._stop_recording()
         self.btn_record.setChecked(False)
+        self._cancel_timed_recording()
 
         if self._worker is None:
             return
@@ -814,6 +922,83 @@ class RatemeterPage(QWidget):
         self.btn_record.setText("⏺  Record Data")
         self.lbl_recording.setText("")
 
+    def _on_timed_record_clicked(self) -> None:
+        if self._worker is None or self._timed_recording_running:
+            return
+
+        self._timed_recording_running = True
+        self._timed_recording_id = TimedRecordingLogger.make_run_id()
+        self._timed_recording_started_at = datetime.now()
+        self._timed_peak_buffer = []
+        self._worker.raw_peaks_detected.connect(self._on_raw_peaks_for_timed_recording)
+
+        self.btn_timed_record.setEnabled(False)
+        self.spin_timed_duration.setEnabled(False)
+        self.lbl_timed_recording.setText(
+            f"⏱  Timed recording... ({self.spin_timed_duration.value()} s, waveform plot paused)"
+        )
+
+        self._timed_recording_timer.start(int(self.spin_timed_duration.value() * 1000))
+
+    def _on_raw_peaks_for_timed_recording(self, peaks) -> None:
+        self._timed_peak_buffer.extend(peaks)
+
+    def _on_timed_recording_elapsed(self) -> None:
+        if self._worker is not None:
+            try:
+                self._worker.raw_peaks_detected.disconnect(self._on_raw_peaks_for_timed_recording)
+            except TypeError:
+                pass  # already disconnected (e.g. worker was replaced mid-window)
+        self._timed_recording_running = False  # resumes waveform plotting immediately
+
+        dlg = TimedRecordingMetadataDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            summary = TimedRecordingSummary(
+                recording_id=self._timed_recording_id,
+                timestamp=self._timed_recording_started_at,
+                description=dlg.description(),
+                vpp=dlg.vpp(),
+                frequency_hz=dlg.frequency_hz(),
+                duration_s=float(self.spin_timed_duration.value()),
+                total_peak_count=len(self._timed_peak_buffer),
+                channel=self.combo_channel.currentText(),
+                voltage_range_v=_VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02),
+                coupling=self.combo_coupling.currentText(),
+                sample_interval_ns=_SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200),
+                window_duration_ms=self.spin_window.value(),
+                trigger_enabled=self.chk_trigger_enable.isChecked(),
+                trigger_threshold_mv=self.spin_trigger_threshold.value(),
+            )
+            logger = TimedRecordingLogger(TimedRecordingLogger.default_base_dir())
+            try:
+                logger.save_recording(summary)
+                logger.save_peaks(self._timed_recording_id, self._timed_peak_buffer)
+            except OSError as exc:
+                self._on_error(f"Timed recording save failed: {exc}")
+
+        self._reset_timed_recording_ui()
+
+    def _reset_timed_recording_ui(self) -> None:
+        self._timed_peak_buffer = []
+        self._timed_recording_id = None
+        self._timed_recording_started_at = None
+        self.btn_timed_record.setEnabled(self._worker is not None)
+        self.spin_timed_duration.setEnabled(True)
+        self.lbl_timed_recording.setText("")
+
+    def _cancel_timed_recording(self) -> None:
+        """Abort an in-progress timed recording and discard captured peaks."""
+        if not self._timed_recording_running:
+            return
+        self._timed_recording_timer.stop()
+        if self._worker is not None:
+            try:
+                self._worker.raw_peaks_detected.disconnect(self._on_raw_peaks_for_timed_recording)
+            except TypeError:
+                pass
+        self._timed_recording_running = False
+        self._reset_timed_recording_ui()
+
     def _restart_worker(self) -> None:
         if self._worker is None:
             return  # not running — control changes take effect at next Start
@@ -841,6 +1026,8 @@ class RatemeterPage(QWidget):
             return
 
         self._start_worker(config)
+        if self._timed_recording_running:
+            self._worker.raw_peaks_detected.connect(self._on_raw_peaks_for_timed_recording)
         self.lbl_status.setText("Running")
 
     def _schedule_restart(self, *_args) -> None:
@@ -862,6 +1049,8 @@ class RatemeterPage(QWidget):
     # ------------------------------------------------------------------
 
     def _on_waveform_ready(self, record) -> None:
+        if self._timed_recording_running:
+            return
         now = time.monotonic()
         if now - self._last_plot_update < _PLOT_MIN_INTERVAL_S:
             return
@@ -980,6 +1169,7 @@ class RatemeterPage(QWidget):
         self.btn_start.setEnabled(connected and not self._daq_busy)
         self.btn_stop.setEnabled(False)
         self.btn_record.setEnabled(False)
+        self.btn_timed_record.setEnabled(False)
 
     def _set_controls_running(self) -> None:
         self.btn_connect.setEnabled(False)
@@ -987,6 +1177,7 @@ class RatemeterPage(QWidget):
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self.btn_record.setEnabled(True)
+        self.btn_timed_record.setEnabled(True)
 
     @staticmethod
     def _set_label_good(label: QLabel, text: str) -> None:
@@ -1037,6 +1228,13 @@ class RatemeterPage(QWidget):
 
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
+
+        for key, box in self._collapsible_sections.items():
+            box.setExpanded(s.value(f"ratemeter/section_expanded_{key}", True, type=bool))
+
+        self.spin_timed_duration.setValue(
+            s.value("ratemeter/timed_recording_duration_s", 30, type=int)
+        )
 
         self._on_trigger_enabled_changed()
         self._update_plot_axes()
@@ -1096,6 +1294,10 @@ class RatemeterPage(QWidget):
             for b in self._bands_from_table()
         ]
         s.setValue("ratemeter/bands", json.dumps(bands))
+
+        for key, box in self._collapsible_sections.items():
+            s.setValue(f"ratemeter/section_expanded_{key}", box.isExpanded())
+        s.setValue("ratemeter/timed_recording_duration_s", self.spin_timed_duration.value())
 
     # ------------------------------------------------------------------
     # Cleanup

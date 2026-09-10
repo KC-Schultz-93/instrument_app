@@ -214,3 +214,23 @@ class RatemeterEvent:
     event_type: str                  # "transit" | "splat" | "unknown"
     velocity_m_s: Optional[float]    # None when width_ns is None or threshold unset
     transit_time_us: Optional[float]  # Δt in microseconds (width_ns / 1000)
+
+
+@dataclass
+class TimedRecordingSummary:
+    """One completed timed-recording session, appended to recordings.csv."""
+
+    recording_id: str          # YYYY_MM_DD_HHmmss — join key with peaks.csv
+    timestamp: datetime
+    description: str
+    vpp: float
+    frequency_hz: float
+    duration_s: float
+    total_peak_count: int
+    channel: str
+    voltage_range_v: float
+    coupling: str
+    sample_interval_ns: int
+    window_duration_ms: float
+    trigger_enabled: bool
+    trigger_threshold_mv: float

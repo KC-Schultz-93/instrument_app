@@ -33,6 +33,7 @@ class RatemeterWorker(QThread):
     status_update = pyqtSignal(str)
     trace_count_changed = pyqtSignal(int)     # total windows acquired
     peak_event = pyqtSignal(object)           # RatemeterEvent — one per detected peak, always emitted
+    raw_peaks_detected = pyqtSignal(object)   # List[PeakRecord] — every peak in this record, pre band-match
 
     _RATE_EMIT_INTERVAL_S = 0.5
 
@@ -110,6 +111,8 @@ class RatemeterWorker(QThread):
             height_threshold_v=height_override,
             width_rel_height=self._config.width_rel_height,
         )
+
+        self.raw_peaks_detected.emit(peaks)
 
         now = time.monotonic()
         now_dt = datetime.now()

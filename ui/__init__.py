@@ -15,6 +15,7 @@ from .composites import (
     AcquisitionPanel,
 )
 from .plots import TimePressureView
+from .collapsible_box import CollapsibleBox
 
 __all__ = [
     "ThemedButton",
@@ -27,4 +28,5 @@ __all__ = [
     "AODOPanel",
     "AcquisitionPanel",
     "TimePressureView",
+    "CollapsibleBox",
 ]
