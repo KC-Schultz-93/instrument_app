@@ -15,6 +15,9 @@ Notes:
 
 Changelog:
 - 2025-08-23 · 0.1.0 · KC · Initial CSV writer with header + timestamped file.
+- 2026-09-21 · 0.2.0 · KC · Edited despite CLAUDE.md's "do not touch" note, with
+  explicit user go-ahead: appended a Maint column (last column, so existing
+  files/tooling that read the first six columns positionally are unaffected).
 """
 
 
@@ -31,9 +34,9 @@ class DataRecorder:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.path = self.root / f"{CSV_BASENAME}_{ts}.csv"
         with self.path.open("w", newline="") as f:
-            csv.writer(f).writerow(["Timestamp","Elapsed_s","UHV_Torr","Foreline_Torr","TG220_Status","TG60_Status"])
+            csv.writer(f).writerow(["Timestamp","Elapsed_s","UHV_Torr","Foreline_Torr","TG220_Status","TG60_Status","Maint"])
 
     def append(self, r: Reading):
         with self.path.open("a", newline="") as f:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            csv.writer(f).writerow([ts, r.t_s, r.uhv_torr, r.fore_torr, r.tg220, r.tg60])
+            csv.writer(f).writerow([ts, r.t_s, r.uhv_torr, r.fore_torr, r.tg220, r.tg60, getattr(r, "maint", "")])
