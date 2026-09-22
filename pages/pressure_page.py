@@ -60,18 +60,30 @@ class PressureInterlockPage(QWidget):
 
         # --- top toolbar ---------------------------------------------------------
         self.toolbar = PortToolbar()
+        self.toolbar.setMaximumHeight(3 * 36)  # cap to ~3x pill height, not stretched
         self.toolbar.refresh.connect(self._refresh_ports)
         self.toolbar.connect_requested.connect(self._connect)
         self.toolbar.disconnect_requested.connect(self.serial.disconnect)
-        self.toolbar.status_requested.connect(lambda: self.serial.send_command("?"))
-        grid.addWidget(self.toolbar, 0, 0, 1, 3)
+        grid.addWidget(self.toolbar, 0, 0, 1, 2)
 
-        # --- status/log line -------------------------------------------------
-        self.status_lbl = PillLabel("", bg_role=lambda t: t.CARD_BG)
-        grid.addWidget(self.status_lbl, 1, 0, 1, 3)
-
-        # --- left column (cards) -------------------------------------------------
+        # --- left column (view/range selectors, status line, cards, MAINT) -------
         left = QVBoxLayout(); left.setSpacing(8)
+
+        view_row = QHBoxLayout(); view_row.setSpacing(8)
+        self.btn_view_fore = ThemedButton("Foreline", height=34)
+        self.btn_view_uhv = ThemedButton("UHV", height=34)
+        self.range_cb = QComboBox();
+        self.range_cb.addItems(["1 min", "10 min", "1 hour", "6 hours", "24 hours"]);
+        self.range_cb.setFixedHeight(34)
+        view_row.addWidget(self.btn_view_fore)
+        view_row.addWidget(self.btn_view_uhv)
+        view_row.addWidget(self.range_cb)
+        left.addLayout(view_row)
+
+        self.status_lbl = PillLabel("", bg_role=lambda t: t.CARD_BG)
+        self.status_lbl.setFixedHeight(34)
+        left.addWidget(self.status_lbl)
+
         self.card_fore = PressureCard("Foreline Pressure")
         self.card_uhv = PressureCard("UHV Pressure")
         self.card_tg60 = PumpCard("TG60")
@@ -87,36 +99,38 @@ class PressureInterlockPage(QWidget):
         left.addWidget(self.card_uhv)
         left.addWidget(self.card_tg60)
         left.addWidget(self.card_tg220)
+
+        maint_row = QHBoxLayout(); maint_row.setSpacing(8)
+        self.btn_maint = ThemedButton("Enter MAINT", height=34)
+        self.btn_clear_fault = ThemedButton("Clear Fault", height=34)
+        self.maint_indicator = PillLabel("MAINT: OFF", bg_role=lambda t: t.GOOD)
+        maint_row.addWidget(self.btn_maint)
+        maint_row.addWidget(self.btn_clear_fault)
+        maint_row.addWidget(self.maint_indicator)
+        left.addLayout(maint_row)
+
         left.addStretch(1)
-        grid.addLayout(left, 2, 0, 3, 1)
+        grid.addLayout(left, 1, 0, 2, 1)
         grid.setColumnStretch(0, 1)
 
         # --- plot ---------------------------------------------------------------
         self.plot = TimePressureView()
-        grid.addWidget(self.plot, 2, 1, 2, 2)
+        grid.addWidget(self.plot, 1, 1, 1, 1)
         grid.setColumnStretch(1, 6)
 
         # --- bottom controls -------------------------------------------------
         bottom = QHBoxLayout(); bottom.setSpacing(8)
-        self.btn_view_fore = ThemedButton("Foreline", height=34)
-        self.btn_view_uhv = ThemedButton("UHV", height=34)
-        self.range_cb = QComboBox();
-        self.range_cb.addItems(["1 min", "10 min", "1 hour", "6 hours", "24 hours"]);
-        self.range_cb.setFixedHeight(34)
         self.btn_reset = ThemedButton("Reset View", height=34)
-        self.btn_maint = ThemedButton("Enter MAINT", height=34)
-        self.btn_clear_fault = ThemedButton("Clear Fault", height=34)
-        self.maint_indicator = PillLabel("MAINT: OFF", bg_role=lambda t: t.GOOD)
-        bottom.addStretch(1)
-        bottom.addWidget(self.btn_view_fore)
-        bottom.addWidget(self.btn_view_uhv)
-        bottom.addWidget(self.range_cb)
         bottom.addStretch(1)
         bottom.addWidget(self.btn_reset)
-        bottom.addWidget(self.btn_maint)
-        bottom.addWidget(self.btn_clear_fault)
-        bottom.addWidget(self.maint_indicator)
-        grid.addLayout(bottom, 4, 1, 1, 2)
+        grid.addLayout(bottom, 2, 1, 1, 1)
+
+        # Keep the toolbar/bottom rows sized to content; give the plot row the
+        # leftover vertical space (otherwise QGridLayout splits it evenly across
+        # all rows, since none had an explicit nonzero stretch).
+        grid.setRowStretch(0, 0)
+        grid.setRowStretch(1, 1)
+        grid.setRowStretch(2, 0)
 
         # --- wiring -------------------------------------------------------------
         self.btn_view_fore.clicked.connect(lambda: self.plot.set_view("Foreline"))

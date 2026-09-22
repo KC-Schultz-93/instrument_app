@@ -95,7 +95,6 @@ class PortToolbar(QWidget, ThemedMixin):
     refresh = pyqtSignal()
     connect_requested = pyqtSignal(str)
     disconnect_requested = pyqtSignal()
-    status_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -105,7 +104,6 @@ class PortToolbar(QWidget, ThemedMixin):
         self.btn_refresh = ThemedButton("Refresh", height=36)
         self.btn_connect = ThemedButton("Connect", height=36)
         self.btn_disconnect = ThemedButton("Disconnect", height=36)
-        self.btn_status = ThemedButton("STATUS", height=36)
         self.conn = PillLabel("Connection: Not connected", bg_role=lambda t: t.BAD,)
         self.conn.setFixedHeight(36)
 
@@ -114,14 +112,12 @@ class PortToolbar(QWidget, ThemedMixin):
         lay.addWidget(self.btn_connect)
         lay.addWidget(self.btn_disconnect)
         lay.addStretch(1)
-        lay.addWidget(self.btn_status)
         lay.addWidget(self.conn)
 
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_connect.clicked.connect(self._emit_connect)
         self.btn_disconnect.clicked.connect(self.disconnect_requested)
-        self.btn_status.clicked.connect(self.status_requested)
-        
+
         ThemedMixin.__init__(self)
 
     def _emit_connect(self) -> None:
