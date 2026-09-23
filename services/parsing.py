@@ -5,7 +5,7 @@ Purpose: Parse Arduino CSV-ish lines into a typed Reading dataclass.
 
 How it fits:
 - Depends on: dataclasses
-- Used by:    SerialWorker (line→Reading), DataRecorder (type hints)
+- Used by:    SerialWorker (line→Reading), PressureLogger (type hints)
 
 Wire format (INT_SYS/SerialInterface.cpp printCsvHeader/printCsvLineAveraged):
     ms,uhv_V,fore_V,uhv_Torr,fore_Torr,state,

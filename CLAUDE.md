@@ -41,7 +41,7 @@ Recorded Data/
 
 - `pages/` calls `services/` — never the reverse.
 - Each `services/` module owns one concern (see below). Do not combine them.
-- **Do not modify `services/serial_manager.py` or pressure-related functionality** (`pages/pressure_page.py`, `services/data_recorder.py`).
+- **Do not modify `services/serial_manager.py` or pressure-related functionality** (`pages/pressure_page.py`, `services/pressure_logger.py`).
 - DAQ and serial/pressure subsystems must remain decoupled — the DAQ page uses its own `DAQChannels` signal bus (`services/daq_channels.py`), not the serial/pressure code path.
 - Prefer dataclasses with explicit fields over loose tuples or dicts.
 - Use a worker thread (`QThread`) for acquisition — never block the Qt UI thread.
@@ -62,7 +62,7 @@ Recorded Data/
 | `services/daq_logger.py` | Saving raw traces, reduced summaries, run metadata, mass histograms |
 | `services/daq_channels.py` | Qt signal bus for the DAQ page/worker — DAQ-only, not shared with serial/pressure |
 | `services/serial_manager.py` | Serial comms to Arduino — **do not touch** |
-| `services/data_recorder.py` | Pressure logging — **do not touch** |
+| `services/pressure_logger.py` | Pressure logging (daily-rotating UHV/Foreline CSVs) — **do not touch** |
 
 ---
 

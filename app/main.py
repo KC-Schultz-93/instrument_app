@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtWidgets import (
@@ -14,7 +13,7 @@ from instrument_app.pages.pressure_page import PressureInterlockPage
 from instrument_app.pages.daq_page import DAQPage
 from instrument_app.pages.ratemeter_page import RatemeterPage
 from instrument_app.services.serial_manager import SerialManager
-from instrument_app.services.data_recorder import DataRecorder
+from instrument_app.services.pressure_logger import PressureLogger
 from instrument_app.services.daq_channels import DAQChannels
 
 from instrument_app.theme.manager import theme_mgr
@@ -214,12 +213,7 @@ class MainWindow(QMainWindow):
 
     # ---------- Helpers ----------
     def _make_recorder(self):
-        logdir = Path(__file__).resolve().parent.parent / "Recorded Data" / "Pressures"
-        logdir.mkdir(parents=True, exist_ok=True)
-        try:
-            return DataRecorder(logdir)
-        except TypeError:
-            return DataRecorder()
+        return PressureLogger(PressureLogger.default_base_dir())
 
 
 def main():
