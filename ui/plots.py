@@ -72,7 +72,7 @@ class TimePressureView(QWidget):
         super().__init__(parent)
         # --- internal state ---
         self._view = "UHV"
-        self._window = "5 min"
+        self._window = "1 min"
         self._manual = False
         self._ts, self._uhv, self._fl = [], [], []
         self._drag = False
@@ -147,6 +147,12 @@ class TimePressureView(QWidget):
         self._manual=False
         self._update()
 
+    def reset_view(self) -> None:
+        """Drop any manual (rubber-band) zoom and resume auto-following the
+        selected time window - undoes what a right-drag zoom leaves stuck."""
+        self._manual = False
+        self._update()
+
     def append(self, r: Reading) -> None:
         self._ts.append(r.t_s)
         self._uhv.append(r.uhv_torr if r.uhv_torr is not None else math.nan)
@@ -158,7 +164,8 @@ class TimePressureView(QWidget):
         sel = self._window
         if sel == "All":
             return xs, self._fl, self._uhv
-        minutes = 60 if sel.startswith("1 hour") else int(sel.split()[0])
+        n, unit = sel.split()
+        minutes = int(n) * 60 if unit.startswith("hour") else int(n)
         cutoff = xs[-1] - minutes if xs else 0.0
         mask = [x >= cutoff for x in xs]
         xf = [x for x, m in zip(xs, mask) if m]
