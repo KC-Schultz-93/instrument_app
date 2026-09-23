@@ -3,7 +3,7 @@
 Module: instrument_app.ui.plots
 Purpose: Reusable pyqtgraph plot widget for pressure vs. time (log-Y), with:
          - dynamic bottom axis (minutes↔hours),
-         - crosshair + hover readout,
+         - hover readout (time/pressure at cursor, no crosshair lines),
          - RMB rubber-band zoom.
 
 How it fits:
@@ -18,6 +18,9 @@ Public API:
 Changelog:
 - 2025-08-23 · 0.1.0 · KC · Extracted plotting logic into standalone widget.
 - 2025-09-10 · 0.1.1 · KC · Refactored to plot views throughout the app.
+- 2026-09-23 · 0.1.2 · KC · New data no longer yanks the view back after a
+  normal pan/zoom/scroll (only explicit window-select or Reset View resumes
+  auto-follow). Removed the crosshair lines; kept the hover text readout.
 """
 
 from __future__ import annotations
@@ -90,20 +93,17 @@ class TimePressureView(QWidget):
         self.uhv_curve = self.plot.plot(pen=pg.mkPen(style.GOOD, width=1))
         self.fl_curve = self.plot.plot(pen=pg.mkPen(style.BAD, width=1))
 
-        # crosshair + hover readout
-        self.vline = pg.InfiniteLine(angle=90, movable=False)
-        self.hline = pg.InfiniteLine(angle=0, movable=False)
-        self.plot.addItem(self.vline, ignoreBounds=True)
-        self.plot.addItem(self.hline, ignoreBounds=True)
-        self.vline.hide(); self.hline.hide()
-
+        # hover readout (time/pressure at cursor - no crosshair lines)
         self.hover = pg.TextItem(color=style.TXT)
         self.hover.hide()
         self.plot.addItem(self.hover, ignoreBounds=True)
 
         # viewbox + signals
         self.vb = self.plot.getPlotItem().getViewBox()
+        self._auto_updating = False
         self.vb.sigXRangeChanged.connect(self._on_xrange)
+        self.vb.sigXRangeChanged.connect(self._on_user_range_change)
+        self.vb.sigYRangeChanged.connect(self._on_user_range_change)
         self.plot.scene().sigMouseMoved.connect(self._on_mouse)
         self.plot.scene().installEventFilter(self)
 
@@ -128,10 +128,6 @@ class TimePressureView(QWidget):
         if hasattr(self, "axis"):
             self.axis.setPen(pen)
             self.axis.setTextPen(pen)
-        if hasattr(self, "vline"):
-            self.vline.setPen(pg.mkPen(style.TXT, width=1))
-        if hasattr(self, "hline"):
-            self.hline.setPen(pg.mkPen(style.TXT, width=1))
         if hasattr(self, "hover"):
             self.hover.setColor(style.TXT)
 
@@ -185,27 +181,36 @@ class TimePressureView(QWidget):
             self.uhv_curve.setData(xs_f, uhv_f)
             self.fl_curve.setData([], [])
         if not self._manual and xs_f:
-            self.vb.setXRange(xs_f[0], xs_f[-1], padding=0.02)
-            data = uhv_f if self._view == "UHV" else fl_f
-            finite = [d for d in data if d is not None and not math.isnan(d) and d > 0]
-            if finite:
-                y0, y1 = min(finite), max(finite)
-                if y0 == y1:
-                    y0 *= 0.9
-                    y1 *= 1.1
-                eps = 1e-30
-                self.vb.setYRange(max(y0 * 0.9, eps), max(y1 * 1.1, eps * 10), padding=0.0)
+            self._auto_updating = True
+            try:
+                self.vb.setXRange(xs_f[0], xs_f[-1], padding=0.02)
+                data = uhv_f if self._view == "UHV" else fl_f
+                finite = [d for d in data if d is not None and not math.isnan(d) and d > 0]
+                if finite:
+                    y0, y1 = min(finite), max(finite)
+                    if y0 == y1:
+                        y0 *= 0.9
+                        y1 *= 1.1
+                    eps = 1e-30
+                    self.vb.setYRange(max(y0 * 0.9, eps), max(y1 * 1.1, eps * 10), padding=0.0)
+            finally:
+                self._auto_updating = False
 
     def _on_xrange(self, *_):
         xr = self.vb.viewRange()[0]
         self.axis.update_mode(xr[0], xr[1])
 
+    def _on_user_range_change(self, *_):
+        # A range change we didn't just issue ourselves in _update() means the
+        # user panned/zoomed/scrolled - stop auto-following so new data
+        # doesn't yank their view back.
+        if not self._auto_updating:
+            self._manual = True
+
     def _on_mouse(self, pos):
         if not self._ts:
             return
         if not self.plot.sceneBoundingRect().contains(pos):
-            self.vline.hide()
-            self.hline.hide()
             self.hover.hide()
             return
         mp = self.vb.mapSceneToView(pos)
@@ -218,12 +223,8 @@ class TimePressureView(QWidget):
         px = xs[idx]
         py = series[idx]
         if py is None or (isinstance(py, float) and (math.isnan(py) or py <= 0)):
-            self.vline.hide(); self.hline.hide(); self.hover.hide(); 
+            self.hover.hide()
             return
-        self.vline.setPos(px)
-        self.hline.setPos(py)
-        self.vline.show()
-        self.hline.show()
         span = abs(self.vb.viewRange()[0][1] - self.vb.viewRange()[0][0])
         t_str = f"{(px/60.0):.2f} hr" if span >= 120 else f"{px:.2f} min"
         self.hover.setText(f"{t_str}\n{py:.2E} Torr")

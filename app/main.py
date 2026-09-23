@@ -214,7 +214,7 @@ class MainWindow(QMainWindow):
 
     # ---------- Helpers ----------
     def _make_recorder(self):
-        logdir = Path.home() / "InstrumentLogs"
+        logdir = Path(__file__).resolve().parent.parent / "Recorded Data" / "Pressures"
         logdir.mkdir(parents=True, exist_ok=True)
         try:
             return DataRecorder(logdir)
