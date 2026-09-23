@@ -5,7 +5,7 @@ import sys
 
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QTabWidget, QAction
+    QApplication, QMainWindow, QTabWidget, QAction, QScrollArea
 )
 import pyqtgraph as pg
 
@@ -53,15 +53,29 @@ class MainWindow(QMainWindow):
 
         # restore size/last tab
         self._restore_window_state()
+        self._clamp_max_size_to_screen()
 
     # ---------- UI ----------
     def _build_tabs(self):
         self.pressure = PressureInterlockPage(serial=self.serial, recorder=self.recorder)
         self.daq = DAQPage(self.daq_channels)
         self.ratemeter = RatemeterPage(self.daq_channels)
-        self.tabs.addTab(self.pressure, "Pressures / Interlocks")
-        self.tabs.addTab(self.daq, "DAQ")
-        self.tabs.addTab(self.ratemeter, "Ratemeter")
+        self.tabs.addTab(self._scrollable(self.pressure), "Pressures / Interlocks")
+        self.tabs.addTab(self._scrollable(self.daq), "DAQ")
+        self.tabs.addTab(self._scrollable(self.ratemeter), "Ratemeter")
+
+    @staticmethod
+    def _scrollable(widget):
+        """Wrap a tab page so an oversized page scrolls internally instead of
+        forcing the whole main window to grow to fit it. QTabWidget sizes
+        itself to the LARGEST of all its tabs' minimum sizes (not just the
+        visible one), so one tall/wide page can otherwise push the window
+        past what the monitor can display."""
+        area = QScrollArea()
+        area.setWidget(widget)
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.NoFrame)
+        return area
 
     def _build_menu(self):
         mbar = self.menuBar()
@@ -201,6 +215,23 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(
             lambda i: self._settings.setValue("main/last_tab", i)
         )
+
+    def _clamp_max_size_to_screen(self):
+        """Never let the window (or a child layout demanding more space, e.g.
+        the pressure plot growing once live data arrives) exceed the actual
+        usable area of whichever monitor it's currently on."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            self.setMaximumSize(avail.width(), avail.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._clamp_max_size_to_screen()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._clamp_max_size_to_screen()
 
     def closeEvent(self, ev):
         self._settings.setValue("main/geometry", self.saveGeometry())
