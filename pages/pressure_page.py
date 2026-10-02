@@ -2,11 +2,11 @@
 """
 Module: instrument_app.pages.pressure_page
 Purpose: UI page for pressures/interlocks: port controls, status pills, pump controls,
-         and a time-series plot with log-Y and dynamic min↔hr X-axis.
+         and a time-series plot with a wall-clock/log-Y axis.
 
 How it fits:
 - Depends on: instrument_app.services.serial_manager.SerialManager
-              instrument_app.services.data_recorder.DataRecorder
+              instrument_app.services.pressure_logger.PressureLogger
               instrument_app.ui.plots.TimePressureView
               instrument_app.theme.style
 - Used by:    MainWindow (as a tab)
@@ -26,32 +26,51 @@ Changelog:
   serial commands (were local no-ops); added a status/log pill so connection
   errors and device log lines are visible; added MAINT-toggle and Clear Fault
   controls.
+- 2026-09-23 · 0.3.0 · KC · Edited despite CLAUDE.md's "do not touch" note, with
+  explicit user go-ahead: switched to PressureLogger (daily-rotating UHV/
+  Foreline CSVs, replacing DataRecorder's single-file-per-session scheme);
+  added long time-window presets + custom-hours spinbox and a smoothed-trend
+  toggle to match an example DAQ program's plot.
 """
 
 
 from __future__ import annotations
 
+import time
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QComboBox
+    QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QComboBox, QSpinBox, QCheckBox, QLabel
 )
 from instrument_app.services.serial_manager import SerialManager
-from instrument_app.services.data_recorder import DataRecorder
+from instrument_app.services.pressure_logger import PressureLogger
 from instrument_app.theme import style
 from instrument_app.ui import (
     PortToolbar, PressureCard, PumpCard, PillLabel, ThemedButton, TimePressureView,
 )
 from instrument_app.services.parsing import Reading
 
+# Preset time windows shown in the range dropdown, mapped to hours.
+_TIME_WINDOWS_HOURS = {
+    "1 min": 1 / 60,
+    "10 min": 10 / 60,
+    "1 hour": 1,
+    "3 hours": 3,
+    "6 hours": 6,
+    "12 hours": 12,
+    "24 hours": 24,
+}
+
 
 class PressureInterlockPage(QWidget):
     """Composes pressure cards, pump cards and the time-pressure plot."""
 
-    def __init__(self, serial: SerialManager, recorder: DataRecorder):
+    def __init__(self, serial: SerialManager, recorder: PressureLogger):
         super().__init__()
         self.serial = serial
         self.recorder = recorder
         self._maint_active = False
+        self._start_time: float | None = None
 
         grid = QGridLayout(self)
         grid.setContentsMargins(10, 8, 10, 10)
@@ -73,12 +92,31 @@ class PressureInterlockPage(QWidget):
         self.btn_view_fore = ThemedButton("Foreline", height=34)
         self.btn_view_uhv = ThemedButton("UHV", height=34)
         self.range_cb = QComboBox();
-        self.range_cb.addItems(["1 min", "10 min", "1 hour", "6 hours", "24 hours"]);
+        self.range_cb.addItems(list(_TIME_WINDOWS_HOURS.keys()));
         self.range_cb.setFixedHeight(34)
         view_row.addWidget(self.btn_view_fore)
         view_row.addWidget(self.btn_view_uhv)
         view_row.addWidget(self.range_cb)
         left.addLayout(view_row)
+
+        custom_row = QHBoxLayout(); custom_row.setSpacing(8)
+        custom_row.addWidget(QLabel("Custom hours:"))
+        self.custom_hours_input = QSpinBox()
+        self.custom_hours_input.setMinimum(1)
+        self.custom_hours_input.setMaximum(720)  # 30 days
+        self.custom_hours_input.setValue(1)
+        self.custom_hours_input.setFixedHeight(34)
+        custom_row.addWidget(self.custom_hours_input)
+        custom_row.addStretch(1)
+        left.addLayout(custom_row)
+
+        smooth_row = QHBoxLayout(); smooth_row.setSpacing(8)
+        self.chk_smoothed = QCheckBox("Show Smoothed Trend")
+        self.chk_smoothed_only = QCheckBox("Smoothed Only")
+        smooth_row.addWidget(self.chk_smoothed)
+        smooth_row.addWidget(self.chk_smoothed_only)
+        smooth_row.addStretch(1)
+        left.addLayout(smooth_row)
 
         self.status_lbl = PillLabel("", bg_role=lambda t: t.CARD_BG)
         self.status_lbl.setFixedHeight(34)
@@ -114,7 +152,7 @@ class PressureInterlockPage(QWidget):
         grid.setColumnStretch(0, 1)
 
         # --- plot ---------------------------------------------------------------
-        self.plot = TimePressureView()
+        self.plot = TimePressureView(history_source=self.recorder)
         grid.addWidget(self.plot, 1, 1, 1, 1)
         grid.setColumnStretch(1, 6)
 
@@ -135,7 +173,12 @@ class PressureInterlockPage(QWidget):
         # --- wiring -------------------------------------------------------------
         self.btn_view_fore.clicked.connect(lambda: self.plot.set_view("Foreline"))
         self.btn_view_uhv.clicked.connect(lambda: self.plot.set_view("UHV"))
-        self.range_cb.currentTextChanged.connect(self.plot.set_time_window)
+        self.range_cb.currentTextChanged.connect(
+            lambda label: self.plot.set_time_window(_TIME_WINDOWS_HOURS[label])
+        )
+        self.custom_hours_input.valueChanged.connect(self.plot.set_time_window)
+        self.chk_smoothed.stateChanged.connect(self._on_smoothed_toggled)
+        self.chk_smoothed_only.stateChanged.connect(self._on_smoothed_only_toggled)
         self.btn_reset.clicked.connect(getattr(self.plot, "reset_view", lambda: None))
         self.btn_maint.clicked.connect(self._toggle_maint)
         self.btn_clear_fault.clicked.connect(lambda: self.serial.send_command("R"))
@@ -183,8 +226,32 @@ class PressureInterlockPage(QWidget):
         self._set_dot(self.card_tg60.dot, getattr(r, "tg60", ""))
         self._set_maint_state(bool(getattr(r, "maint", False)))
         self.plot.append(r)
-        if hasattr(self.recorder, "append"):
-            self.recorder.append(r)
+        if self._start_time is None:
+            self._start_time = time.time()
+        elapsed_min = (time.time() - self._start_time) / 60.0
+        self.recorder.log_pressure(elapsed_min, r.uhv_torr, r.fore_torr)
+
+    def _on_smoothed_toggled(self, state: int) -> None:
+        enabled = state == Qt.Checked
+        self.plot.set_smoothed(enabled)
+        if not enabled and self.chk_smoothed_only.isChecked():
+            self.chk_smoothed_only.blockSignals(True)
+            self.chk_smoothed_only.setChecked(False)
+            self.chk_smoothed_only.blockSignals(False)
+            self.plot.set_smoothed_only(False)
+
+    def _on_smoothed_only_toggled(self, state: int) -> None:
+        enabled = state == Qt.Checked
+        self.plot.set_smoothed_only(enabled)
+        if enabled and not self.chk_smoothed.isChecked():
+            self.chk_smoothed.blockSignals(True)
+            self.chk_smoothed.setChecked(True)
+            self.chk_smoothed.blockSignals(False)
+            self.plot.set_smoothed(True)
+
+    def closeEvent(self, event) -> None:
+        self.recorder.close()
+        super().closeEvent(event)
 
     def _toggle_maint(self) -> None:
         # Entering/exiting MAINT both use the same 'M' command: a first 'M' arms

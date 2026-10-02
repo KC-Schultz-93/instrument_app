@@ -10,6 +10,7 @@ dependencies = [
     "PyQt5>=5.15.9,<5.16",
     "pyqtgraph>=0.13.4,<0.14",
     "numpy>=2.1",
+    "scipy>=1.11",
     "pyserial>=3.5,<4.0",
 ]
 
