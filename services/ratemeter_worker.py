@@ -21,7 +21,12 @@ from typing import Dict, Optional
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from instrument_app.services.picoscope_service import PicoScopeService
-from instrument_app.services.daq_models import RatemeterConfig, RatemeterEvent
+from instrument_app.services.daq_models import (
+    MatchedFilterConfig,
+    PeakRecord,
+    RatemeterConfig,
+    RatemeterEvent,
+)
 from instrument_app.services.waveform_processor import WaveformProcessor
 from instrument_app.services.signal_extractor import SignalExtractor
 
@@ -34,6 +39,7 @@ class RatemeterWorker(QThread):
     trace_count_changed = pyqtSignal(int)     # total windows acquired
     peak_event = pyqtSignal(object)           # RatemeterEvent — one per detected peak, always emitted
     raw_peaks_detected = pyqtSignal(object)   # List[PeakRecord] — every peak in this record, pre band-match
+    correlation_ready = pyqtSignal(object)    # np.ndarray — normalized correlation, matched filter mode only
 
     _RATE_EMIT_INTERVAL_S = 0.5
 
@@ -41,6 +47,7 @@ class RatemeterWorker(QThread):
         self,
         service: PicoScopeService,
         config: RatemeterConfig,
+        mf_config: MatchedFilterConfig,
         trigger_enabled: bool,
         trigger_threshold_v: float,
         trigger_direction: str,
@@ -55,6 +62,14 @@ class RatemeterWorker(QThread):
         )
         self._captures_per_batch = max(1, captures_per_batch)
         self._extractor = SignalExtractor()
+
+        self._mf_config = mf_config
+        if mf_config.enabled:
+            from instrument_app.services.matched_filter import MatchedFilter
+            self._matcher = MatchedFilter(mf_config, config.sample_interval_ns)
+        else:
+            self._matcher = None
+
         self._stop_flag = False
         self._trace_id = 0
         self._hit_times: Dict[str, deque] = {b.label: deque() for b in config.bands}
@@ -96,21 +111,38 @@ class RatemeterWorker(QThread):
         baseline_mean, baseline_rms = WaveformProcessor.estimate_baseline(record.voltage)
         corrected = WaveformProcessor.subtract_baseline(record.voltage, baseline_mean)
 
-        # Use the lowest band boundary (×0.9) as the height threshold so
-        # any peak that could fall in a band is detected.  A sigma-based
-        # threshold would be set at the signal amplitude for continuous
-        # signals (no quiet pre-trigger baseline), silencing all peaks.
-        min_band_v = (
-            min(b.low_mv for b in self._config.bands) / 1000.0
-            if self._config.bands else None
-        )
-        height_override = min_band_v * 0.9 if min_band_v else None
+        if self._matcher is not None:
+            # --- Matched filter path ---
+            events = self._matcher.detect(corrected, record.time_ns)
+            peaks = [
+                PeakRecord(
+                    peak_index=evt.event_index,
+                    time_ns=evt.time_us * 1_000.0,
+                    amplitude_v=evt.amplitude_v,
+                    width_samples=None,
+                    width_ns=None,
+                    rise_ns=None,
+                    fall_ns=None,
+                )
+                for evt in events
+            ]
+        else:
+            # --- Simple threshold path ---
+            # Use the lowest band boundary (×0.9) as the height threshold so
+            # any peak that could fall in a band is detected.  A sigma-based
+            # threshold would be set at the signal amplitude for continuous
+            # signals (no quiet pre-trigger baseline), silencing all peaks.
+            min_band_v = (
+                min(b.low_mv for b in self._config.bands) / 1000.0
+                if self._config.bands else None
+            )
+            height_override = min_band_v * 0.9 if min_band_v else None
 
-        peaks = self._extractor.find_peaks(
-            corrected, baseline_mean, baseline_rms, record.time_ns,
-            height_threshold_v=height_override,
-            width_rel_height=self._config.width_rel_height,
-        )
+            peaks = self._extractor.find_peaks(
+                corrected, baseline_mean, baseline_rms, record.time_ns,
+                height_threshold_v=height_override,
+                width_rel_height=self._config.width_rel_height,
+            )
 
         self.raw_peaks_detected.emit(peaks)
 
@@ -131,7 +163,13 @@ class RatemeterWorker(QThread):
                 dq.append(now)
                 w_ns = peak.width_ns
 
-                if band.transit_min_width_ns is None:
+                if self._matcher is not None:
+                    # Matched-filter events have no peak width, so transit/splat
+                    # classification (which depends on width) does not apply.
+                    event_type = "unknown"
+                    velocity = None
+                    transit_us = None
+                elif band.transit_min_width_ns is None:
                     event_type = "unknown"
                     velocity = None
                     transit_us = None
@@ -157,6 +195,8 @@ class RatemeterWorker(QThread):
                     transit_time_us=transit_us,
                 ))
 
+        if self._matcher is not None:
+            self.correlation_ready.emit(self._matcher.last_correlation)
         self.waveform_ready.emit(record)
         self.trace_count_changed.emit(self._trace_id)
 

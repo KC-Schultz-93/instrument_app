@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -63,6 +64,7 @@ from PyQt5.QtWidgets import (
 from instrument_app.services.daq_channels import DAQChannels
 from instrument_app.services.daq_models import (
     AmplitudeBand,
+    MatchedFilterConfig,
     PeakRecord,
     RatemeterConfig,
     RatemeterEvent,
@@ -124,6 +126,14 @@ _PLOT_MIN_INTERVAL_S = 0.1  # 10 Hz waveform refresh cap
 _RESTART_DEBOUNCE_MS = 300
 
 _WIDTH_REL_HEIGHT_MAP = {0: 0.5, 1: 0.2, 2: 0.1}
+
+_MF_POLARITY_MAP = {
+    "Positive first": "positive_first",
+    "Negative first": "negative_first",
+    "Both":           "both",
+}
+_DETECTION_MODE_SIMPLE = "Simple threshold"
+_DETECTION_MODE_MATCHED_FILTER = "Matched filter (bipolar)"
 
 
 class TimedRecordingMetadataDialog(QDialog):
@@ -248,6 +258,7 @@ class RatemeterPage(QWidget):
         self._collapsible_sections: Dict[str, CollapsibleBox] = {
             "acquisition": self._make_acquisition_group(),
             "trigger": self._make_trigger_group(),
+            "detection_mode": self._make_detection_mode_group(),
             "averaging": self._make_averaging_group(),
             "bands": self._make_bands_group(),
             "transit": self._make_transit_group(),
@@ -309,6 +320,7 @@ class RatemeterPage(QWidget):
         self.spin_window.setDecimals(2)
         self.spin_window.setValue(5.0)
         self.spin_window.valueChanged.connect(self._schedule_restart)
+        self.spin_window.valueChanged.connect(self._update_mf_window_warning)
         lay.addWidget(self.spin_window)
 
         lay.addWidget(QLabel("Sample interval:"))
@@ -382,6 +394,100 @@ class RatemeterPage(QWidget):
         self.spin_trigger_threshold.setEnabled(enabled)
         self.combo_trigger_direction.setEnabled(enabled)
         self.spin_trigger_auto.setEnabled(enabled)
+        return box
+
+    def _make_detection_mode_group(self) -> CollapsibleBox:
+        box = CollapsibleBox("Detection Mode")
+        lay = box.content_layout
+
+        lay.addWidget(QLabel("Mode:"))
+        self.combo_detection_mode = QComboBox()
+        self.combo_detection_mode.addItems([_DETECTION_MODE_SIMPLE, _DETECTION_MODE_MATCHED_FILTER])
+        self.combo_detection_mode.currentIndexChanged.connect(self._on_detection_mode_changed)
+        lay.addWidget(self.combo_detection_mode)
+
+        self._mf_controls = QWidget()
+        mf_lay = QVBoxLayout(self._mf_controls)
+        mf_lay.setContentsMargins(0, 0, 0, 0)
+
+        mf_lay.addWidget(QLabel("Template period (µs):"))
+        self.spin_mf_period = QDoubleSpinBox()
+        self.spin_mf_period.setRange(10.0, 500.0)
+        self.spin_mf_period.setValue(85.0)
+        self.spin_mf_period.valueChanged.connect(self._schedule_restart)
+        self.spin_mf_period.valueChanged.connect(self._update_mf_window_warning)
+        mf_lay.addWidget(self.spin_mf_period)
+
+        mf_lay.addWidget(QLabel("Period min (µs):"))
+        self.spin_mf_period_min = QDoubleSpinBox()
+        self.spin_mf_period_min.setRange(10.0, 500.0)
+        self.spin_mf_period_min.setValue(78.0)
+        self.spin_mf_period_min.valueChanged.connect(self._schedule_restart)
+        mf_lay.addWidget(self.spin_mf_period_min)
+
+        mf_lay.addWidget(QLabel("Period max (µs):"))
+        self.spin_mf_period_max = QDoubleSpinBox()
+        self.spin_mf_period_max.setRange(10.0, 500.0)
+        self.spin_mf_period_max.setValue(92.0)
+        self.spin_mf_period_max.valueChanged.connect(self._schedule_restart)
+        self.spin_mf_period_max.valueChanged.connect(self._update_mf_window_warning)
+        mf_lay.addWidget(self.spin_mf_period_max)
+
+        mf_lay.addWidget(QLabel("Polarity:"))
+        self.combo_mf_polarity = QComboBox()
+        self.combo_mf_polarity.addItems(list(_MF_POLARITY_MAP.keys()))
+        self.combo_mf_polarity.currentIndexChanged.connect(self._schedule_restart)
+        mf_lay.addWidget(self.combo_mf_polarity)
+
+        mf_lay.addWidget(QLabel("Correlation threshold:"))
+        self.spin_mf_threshold = QDoubleSpinBox()
+        self.spin_mf_threshold.setRange(0.05, 0.99)
+        self.spin_mf_threshold.setSingleStep(0.01)
+        self.spin_mf_threshold.setDecimals(2)
+        self.spin_mf_threshold.setValue(0.35)
+        self.spin_mf_threshold.valueChanged.connect(self._schedule_restart)
+        mf_lay.addWidget(self.spin_mf_threshold)
+
+        mf_lay.addWidget(QLabel("Min event spacing (µs):"))
+        self.spin_mf_min_spacing = QDoubleSpinBox()
+        self.spin_mf_min_spacing.setRange(10.0, 1000.0)
+        self.spin_mf_min_spacing.setValue(50.0)
+        self.spin_mf_min_spacing.valueChanged.connect(self._schedule_restart)
+        mf_lay.addWidget(self.spin_mf_min_spacing)
+
+        # Empirical template (Step 6 stub) — infrastructure only, inert for now.
+        self.chk_mf_use_empirical = QCheckBox("Use empirical template (.npy)")
+        self.chk_mf_use_empirical.setEnabled(False)
+        self.chk_mf_use_empirical.setChecked(False)
+        self.chk_mf_use_empirical.stateChanged.connect(self._on_mf_use_empirical_changed)
+        mf_lay.addWidget(self.chk_mf_use_empirical)
+
+        self.btn_mf_load_template = QPushButton("Load empirical template (.npy)")
+        self.btn_mf_load_template.setEnabled(False)
+        self.btn_mf_load_template.clicked.connect(self._on_mf_load_template_clicked)
+        mf_lay.addWidget(self.btn_mf_load_template)
+
+        self.lbl_mf_template_path = QLabel("(none)")
+        self.lbl_mf_template_path.setWordWrap(True)
+        self.lbl_mf_template_path.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        mf_lay.addWidget(self.lbl_mf_template_path)
+        self._mf_empirical_template_path = ""
+
+        self.lbl_mf_window_warning = QLabel("")
+        self.lbl_mf_window_warning.setWordWrap(True)
+        self.lbl_mf_window_warning.setStyleSheet(f"color: {style.BAD}; font-size: 9pt; font-weight: bold;")
+        mf_lay.addWidget(self.lbl_mf_window_warning)
+
+        note = QLabel(
+            "Matched filter detects sub-threshold bipolar pulses by shape,\n"
+            "not amplitude. Overrides the simple-threshold peak finder."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        mf_lay.addWidget(note)
+
+        lay.addWidget(self._mf_controls)
+        self._mf_controls.setVisible(False)
         return box
 
     def _make_averaging_group(self) -> CollapsibleBox:
@@ -519,7 +625,9 @@ class RatemeterPage(QWidget):
         note = QLabel(
             "Set a minimum width in the Bands table to enable\n"
             "transit % and velocity display for that band.\n"
-            "Signals below the threshold are counted as splat."
+            "Signals below the threshold are counted as splat.\n"
+            "Ignored in Matched Filter mode — all matched-filter\n"
+            "events are classified as \"unknown\"."
         )
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
@@ -566,7 +674,37 @@ class RatemeterPage(QWidget):
         self._trigger_line.setVisible(False)
         self.plot_widget.addItem(self._trigger_line)
 
+        # Matched-filter correlation overlay — second y-axis on the right,
+        # hidden unless matched filter mode is active.
+        pi.showAxis("right")
+        pi.getAxis("right").setLabel("Correlation score", units="")
+        pi.getAxis("right").setPen(axis_pen)
+        pi.getAxis("right").setTextPen(style.TXT)
+        pi.getAxis("right").setVisible(False)
+
+        self._corr_viewbox = pg.ViewBox()
+        pi.scene().addItem(self._corr_viewbox)
+        pi.getAxis("right").linkToView(self._corr_viewbox)
+        self._corr_viewbox.setXLink(pi)
+        self._corr_viewbox.setYRange(-1.0, 1.0, padding=0)
+        pi.vb.sigResized.connect(self._update_corr_viewbox_geometry)
+
+        self._corr_curve = pg.PlotDataItem(pen=pg.mkPen(style.TXT, width=1, style=Qt.DotLine))
+        self._corr_curve.setVisible(False)
+        self._corr_viewbox.addItem(self._corr_curve)
+        self._last_time_us = None
+        self._last_corr_plot_update = 0.0
+
         return self.plot_widget
+
+    def _update_corr_viewbox_geometry(self) -> None:
+        self._corr_viewbox.setGeometry(self.plot_widget.getPlotItem().vb.sceneBoundingRect())
+
+    def _update_corr_overlay_visibility(self, enabled: bool) -> None:
+        self.plot_widget.getPlotItem().getAxis("right").setVisible(enabled)
+        self._corr_curve.setVisible(enabled)
+        if not enabled:
+            self._corr_curve.setData([], [])
 
     def _make_rates_frame(self) -> QWidget:
         self.rates_frame = QFrame()
@@ -851,7 +989,7 @@ class RatemeterPage(QWidget):
             self._on_error(f"Hardware config error: {exc}")
             return
 
-        self._start_worker(config)
+        self._start_worker(config, self._build_mf_config())
         self.channels.daq_busy.emit(True)
         self._set_controls_running()
         self.lbl_status.setText("Running")
@@ -879,17 +1017,18 @@ class RatemeterPage(QWidget):
         self._set_controls_idle()
         self.lbl_status.setText("Stopped")
 
-    def _start_worker(self, config: RatemeterConfig) -> None:
+    def _start_worker(self, config: RatemeterConfig, mf_config: MatchedFilterConfig) -> None:
         trigger_enabled = self.chk_trigger_enable.isChecked()
         trigger_threshold_v = self.spin_trigger_threshold.value() / 1000.0
         trigger_direction = self._trigger_direction_value()
 
         self._worker = RatemeterWorker(
-            self._service, config, trigger_enabled, trigger_threshold_v, trigger_direction,
+            self._service, config, mf_config, trigger_enabled, trigger_threshold_v, trigger_direction,
             captures_per_batch=self.spin_captures_per_batch.value(),
         )
         self._worker.rates_updated.connect(self._on_rates_updated)
         self._worker.waveform_ready.connect(self._on_waveform_ready)
+        self._worker.correlation_ready.connect(self._on_correlation_ready)
         self._worker.error_occurred.connect(self._on_error)
         self._worker.status_update.connect(self._on_status)
         self._worker.trace_count_changed.connect(self._on_trace_count)
@@ -1025,7 +1164,7 @@ class RatemeterPage(QWidget):
             self._set_controls_idle()
             return
 
-        self._start_worker(config)
+        self._start_worker(config, self._build_mf_config())
         if self._timed_recording_running:
             self._worker.raw_peaks_detected.connect(self._on_raw_peaks_for_timed_recording)
         self.lbl_status.setText("Running")
@@ -1044,6 +1183,36 @@ class RatemeterPage(QWidget):
         self.spin_trigger_auto.setEnabled(enabled)
         self._schedule_restart()
 
+    def _on_detection_mode_changed(self, _index=None) -> None:
+        enabled = self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER
+        self._mf_controls.setVisible(enabled)
+        self._update_corr_overlay_visibility(enabled)
+        self._update_mf_window_warning()
+        self._schedule_restart()
+
+    def _on_mf_use_empirical_changed(self, _state=None) -> None:
+        self.btn_mf_load_template.setEnabled(self.chk_mf_use_empirical.isChecked())
+
+    def _on_mf_load_template_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load Empirical Template", "", "NumPy array (*.npy)")
+        if path:
+            self._mf_empirical_template_path = path
+            self.lbl_mf_template_path.setText(path)
+            self._schedule_restart()
+
+    def _update_mf_window_warning(self, *_args) -> None:
+        if self.combo_detection_mode.currentText() != _DETECTION_MODE_MATCHED_FILTER:
+            self.lbl_mf_window_warning.setText("")
+            return
+        min_window_ms = self.spin_mf_period_max.value() * 3 / 1000.0
+        if self.spin_window.value() < min_window_ms:
+            self.lbl_mf_window_warning.setText(
+                f"⚠ Window duration ({self.spin_window.value():.2f} ms) is shorter than "
+                f"3× period max ({min_window_ms:.2f} ms). Correlation may be unreliable at trace edges."
+            )
+        else:
+            self.lbl_mf_window_warning.setText("")
+
     # ------------------------------------------------------------------
     # Worker signal slots (main thread)
     # ------------------------------------------------------------------
@@ -1059,6 +1228,20 @@ class RatemeterPage(QWidget):
         time_us = record.time_ns / 1e3
         voltage_mv = record.voltage * 1000
         self._plot_item.setData(time_us, voltage_mv)
+        self._last_time_us = time_us
+
+    def _on_correlation_ready(self, corr) -> None:
+        if self._timed_recording_running:
+            return
+        if self.combo_detection_mode.currentText() != _DETECTION_MODE_MATCHED_FILTER:
+            return
+        now = time.monotonic()
+        if now - self._last_corr_plot_update < _PLOT_MIN_INTERVAL_S:
+            return
+        self._last_corr_plot_update = now
+        if self._last_time_us is None or len(self._last_time_us) != len(corr):
+            return
+        self._corr_curve.setData(self._last_time_us, corr)
 
     def _on_rates_updated(self, payload: dict) -> None:
         now = time.monotonic()
@@ -1155,6 +1338,20 @@ class RatemeterPage(QWidget):
             bandwidth_limit_enabled=self.chk_bandwidth_limit.isChecked(),
         )
 
+    def _build_mf_config(self) -> MatchedFilterConfig:
+        enabled = self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER
+        return MatchedFilterConfig(
+            enabled=enabled,
+            period_us=self.spin_mf_period.value(),
+            period_min_us=self.spin_mf_period_min.value(),
+            period_max_us=self.spin_mf_period_max.value(),
+            polarity=_MF_POLARITY_MAP[self.combo_mf_polarity.currentText()],
+            correlation_threshold=self.spin_mf_threshold.value(),
+            min_distance_us=self.spin_mf_min_spacing.value(),
+            use_empirical_template=False,
+            empirical_template_path="",
+        )
+
     def _trigger_direction_value(self) -> str:
         return _TRIGGER_DIRECTIONS.get(self.combo_trigger_direction.currentText(), "RISING")
 
@@ -1226,6 +1423,18 @@ class RatemeterPage(QWidget):
             s.value("ratemeter/captures_per_batch", 1, type=int)
         )
 
+        self.combo_detection_mode.setCurrentText(
+            s.value("ratemeter/detection_mode", _DETECTION_MODE_SIMPLE, type=str)
+        )
+        self.spin_mf_period.setValue(s.value("ratemeter/mf_period_us", 85.0, type=float))
+        self.spin_mf_period_min.setValue(s.value("ratemeter/mf_period_min_us", 78.0, type=float))
+        self.spin_mf_period_max.setValue(s.value("ratemeter/mf_period_max_us", 92.0, type=float))
+        self.combo_mf_polarity.setCurrentText(
+            s.value("ratemeter/mf_polarity", "Positive first", type=str)
+        )
+        self.spin_mf_threshold.setValue(s.value("ratemeter/mf_corr_threshold", 0.35, type=float))
+        self.spin_mf_min_spacing.setValue(s.value("ratemeter/mf_min_spacing_us", 50.0, type=float))
+
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
 
@@ -1237,6 +1446,7 @@ class RatemeterPage(QWidget):
         )
 
         self._on_trigger_enabled_changed()
+        self._on_detection_mode_changed()
         self._update_plot_axes()
         self._rebuild_band_dependent_ui()
 
@@ -1282,6 +1492,14 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/width_rel_height_idx", self.combo_width_rel_height.currentIndex())
         s.setValue("ratemeter/bandwidth_limit_enabled", self.chk_bandwidth_limit.isChecked())
         s.setValue("ratemeter/captures_per_batch", self.spin_captures_per_batch.value())
+
+        s.setValue("ratemeter/detection_mode", self.combo_detection_mode.currentText())
+        s.setValue("ratemeter/mf_period_us", self.spin_mf_period.value())
+        s.setValue("ratemeter/mf_period_min_us", self.spin_mf_period_min.value())
+        s.setValue("ratemeter/mf_period_max_us", self.spin_mf_period_max.value())
+        s.setValue("ratemeter/mf_polarity", self.combo_mf_polarity.currentText())
+        s.setValue("ratemeter/mf_corr_threshold", self.spin_mf_threshold.value())
+        s.setValue("ratemeter/mf_min_spacing_us", self.spin_mf_min_spacing.value())
 
         bands = [
             {

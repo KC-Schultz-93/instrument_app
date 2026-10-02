@@ -201,6 +201,36 @@ class RatemeterConfig:
 
 
 @dataclass
+class MatchedFilterConfig:
+    """Configuration for matched filter bipolar pulse detection."""
+
+    enabled: bool = False
+
+    period_us: float = 85.0             # center estimate for template generation
+    period_min_us: float = 78.0         # validation window lower bound
+    period_max_us: float = 92.0         # validation window upper bound
+    polarity: str = "positive_first"    # "positive_first" | "negative_first" | "both"
+
+    correlation_threshold: float = 0.35 # normalized cross-correlation score (0-1)
+    min_distance_us: float = 50.0       # minimum separation between detected events
+
+    use_empirical_template: bool = False
+    empirical_template_path: str = ""   # path to .npy file; ignored when disabled
+
+
+@dataclass
+class BipolarEventRecord:
+    """One detected bipolar image charge event."""
+
+    event_index: int          # sample index of the correlation peak in the waveform
+    time_us: float            # time from trace start, microseconds
+    amplitude_v: float        # larger-magnitude lobe near the event, baseline-corrected volts
+    correlation_score: float  # normalized cross-correlation score at detection
+    period_us: float          # measured zero-crossing period of this event
+    polarity: str             # "positive_first" or "negative_first"
+
+
+@dataclass
 class RatemeterEvent:
     """
     One detected peak event from the ratemeter worker.
