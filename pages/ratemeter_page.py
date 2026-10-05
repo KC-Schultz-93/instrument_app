@@ -10,8 +10,8 @@ visual confirmation. No data logging, no CDMS physics, stateless between runs.
 Layout
 ------
 PicoScope-style tiles + one docked option panel (see docs/ratemeter_ui.md):
-  Top-left    status block (lbl_status, lbl_trace_count)
-  Top bar     Scope / Trigger / Captures tiles, Connect and Run switches
+  Top-left    status block: Connect/Run switches + lbl_status, lbl_trace_count
+  Top bar     Scope / Trigger / Captures tiles
   Left rail   Channel / Detection / Rates tiles, Data Recorder pinned below
   Dock        ~320 px, one panel at a time, opened by clicking a tile
   Plots       waveform + rate trend (vertical splitter)
@@ -313,19 +313,42 @@ class RatemeterPage(QWidget):
         return panel, lay
 
     def _make_status_block(self) -> QWidget:
+        """Connect/Run switches (left) beside the status readout (right)."""
         card = CardFrame()
         card.setFixedWidth(_RAIL_WIDTH)
-        lay = QVBoxLayout(card)
+        lay = QHBoxLayout(card)
         lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(2)
+        lay.setSpacing(8)
 
+        self.sw_connect = ToggleSwitch()
+        self.sw_connect.clicked.connect(self._on_connect_switch)
+        self.sw_run = ToggleSwitch()
+        self.sw_run.clicked.connect(self._on_run_switch)
+
+        switches = QGridLayout()
+        switches.setHorizontalSpacing(6)
+        switches.setVerticalSpacing(6)
+        for row, (text, sw) in enumerate((("Connect", self.sw_connect), ("Run", self.sw_run))):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font: bold 10pt 'Segoe UI';")
+            switches.addWidget(lbl, row, 0, Qt.AlignRight | Qt.AlignVCenter)
+            switches.addWidget(sw, row, 1)
+        lay.addLayout(switches)
+
+        status = QVBoxLayout()
+        status.setSpacing(2)
         self.lbl_status = QLabel("Idle")
         self.lbl_status.setAlignment(Qt.AlignCenter)
         self.lbl_status.setWordWrap(True)
         self.lbl_trace_count = QLabel("Traces:  0")
         self.lbl_trace_count.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.lbl_status)
-        lay.addWidget(self.lbl_trace_count)
+        self.lbl_connection = QLabel("Disconnected")
+        self.lbl_connection.setAlignment(Qt.AlignCenter)
+        self._set_label_bad(self.lbl_connection, "Disconnected")
+        status.addWidget(self.lbl_status)
+        status.addWidget(self.lbl_trace_count)
+        status.addWidget(self.lbl_connection)
+        lay.addLayout(status, 1)
         self._set_status("Idle")
         return card
 
@@ -339,28 +362,6 @@ class RatemeterPage(QWidget):
         for key in ("scope", "trigger", "captures"):
             lay.addWidget(self._tiles[key])
         lay.addStretch(1)
-
-        self.sw_connect = ToggleSwitch()
-        self.sw_connect.clicked.connect(self._on_connect_switch)
-        self.lbl_connection = QLabel("Disconnected")
-        self._set_label_bad(self.lbl_connection, "Disconnected")
-        self.sw_run = ToggleSwitch()
-        self.sw_run.clicked.connect(self._on_run_switch)
-
-        for text, sw, extra in (("Connect", self.sw_connect, self.lbl_connection), ("Run", self.sw_run, None)):
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            lbl = QLabel(text)
-            lbl.setStyleSheet("background:transparent; font:bold 10pt 'Segoe UI';")
-            row.addWidget(lbl)
-            row.addWidget(sw)
-            col.addLayout(row)
-            if extra is not None:
-                extra.setStyleSheet(extra.styleSheet() + " background:transparent; font-size:8pt;")
-                col.addWidget(extra, 0, Qt.AlignRight)
-            lay.addLayout(col)
         return bar
 
     def _make_left_rail(self) -> QWidget:

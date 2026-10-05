@@ -6,8 +6,8 @@ The original refactor spec is `ratemeter_ui_refactor.md`.
 ## Layout
 
 - **Status block** (top-left): `lbl_status` (coloured idle / running / error) and `lbl_trace_count`.
-- **Top bar**: Scope, Trigger and Captures tiles; Connect and Run toggle switches (`sw_connect`, `sw_run`);
-  `lbl_connection` sits under the Connect switch.
+- **Top bar**: Scope, Trigger and Captures tiles.
+- The Connect and Run switches (`sw_connect`, `sw_run`) live in the status block, with `lbl_connection` under the status text.
 - **Left rail**: Channel, Detection, Rates tiles; Data Recorder pinned at the bottom.
 - **Dock**: click a tile to open its panel, click the same tile to close it, click another tile to swap. Closed on launch.
 - **Plots**: waveform and rate trend. **Bottom strip**: band table + Add/Remove, live band readouts.
