@@ -35,6 +35,9 @@ class AcquisitionConfig:
 
     invert_polarity: bool = False       # negate voltage after ADC conversion
     bandwidth_limit_enabled: bool = False   # PS4000 200 kHz bandwidth limiter (4262 only)
+    probe_factor: float = 1.0           # true_voltage = raw_scope_voltage * probe_factor
+                                         # (voltage_range_v stays the native hardware range;
+                                         # see services/probe_config.py)
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +179,9 @@ class RatemeterConfig:
     electrode_length_m: float = 0.03302   # 1.3 inches — pickup electrode length
     width_rel_height: float = 0.5         # fractional height for peak_widths (0.5 = FWHM)
     bandwidth_limit_enabled: bool = False   # PS4000 200 kHz bandwidth limiter (4262 only)
+    probe_factor: float = 1.0           # true_voltage = raw_scope_voltage * probe_factor
+                                         # (voltage_range_v stays the native hardware range;
+                                         # see services/probe_config.py)
 
     @property
     def num_samples(self) -> int:
@@ -197,6 +203,7 @@ class RatemeterConfig:
             trigger_threshold_v=trigger_threshold_v,
             trigger_direction=trigger_direction,
             bandwidth_limit_enabled=self.bandwidth_limit_enabled,
+            probe_factor=self.probe_factor,
         )
 
 

@@ -9,7 +9,7 @@ No Qt, no file I/O, no hardware access.
 Intended usage (called from AcquisitionWorker per trace):
     mean, rms = WaveformProcessor.estimate_baseline(voltage)
     corrected  = WaveformProcessor.subtract_baseline(voltage, mean)
-    if WaveformProcessor.is_clipped(voltage, config.voltage_range_v):
+    if WaveformProcessor.is_clipped(voltage, config.voltage_range_v * config.probe_factor):
         ...
 """
 

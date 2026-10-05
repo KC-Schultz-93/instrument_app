@@ -72,6 +72,11 @@ from instrument_app.services.daq_models import (
     TimedRecordingSummary,
 )
 from instrument_app.services.picoscope_service import PicoScopeService
+from instrument_app.services.probe_config import (
+    NATIVE_VOLTAGE_RANGES_V,
+    PROBE_FACTORS,
+    format_voltage_label,
+)
 from instrument_app.services.ratemeter_logger import RatemeterLogger
 from instrument_app.services.ratemeter_worker import RatemeterWorker
 from instrument_app.services.timed_recording_logger import TimedRecordingLogger
@@ -83,19 +88,6 @@ from instrument_app.ui import CollapsibleBox
 _APP_ORG = "JohnsonLab"
 _APP_NAME = "NanoInstrumentApp"
 
-# Voltage range options — same list as DAQPage's _VOLTAGE_RANGES.
-_VOLTAGE_RANGES = {
-    "±10 mV":  0.01,
-    "±20 mV":  0.02,
-    "±50 mV":  0.05,
-    "±100 mV": 0.1,
-    "±200 mV": 0.2,
-    "±500 mV": 0.5,
-    "±1 V":    1.0,
-    "±2 V":    2.0,
-    "±5 V":    5.0,
-    "±10 V":   10.0,
-}
 
 _SAMPLE_INTERVALS = {
     "10 ns":  10,
@@ -335,10 +327,16 @@ class RatemeterPage(QWidget):
         self.combo_interval.currentIndexChanged.connect(self._schedule_restart)
         lay.addWidget(self.combo_interval)
 
+        lay.addWidget(QLabel("Probe:"))
+        self.combo_probe = QComboBox()
+        self.combo_probe.addItems(list(PROBE_FACTORS.keys()))
+        self.combo_probe.setCurrentText("x1")
+        self.combo_probe.currentIndexChanged.connect(self._on_probe_changed)
+        lay.addWidget(self.combo_probe)
+
         lay.addWidget(QLabel("Voltage range:"))
         self.combo_range = QComboBox()
-        for label in _VOLTAGE_RANGES:
-            self.combo_range.addItem(label)
+        self._populate_range_combo()
         self.combo_range.setCurrentText("±20 mV")
         self.combo_range.currentIndexChanged.connect(self._schedule_restart)
         lay.addWidget(self.combo_range)
@@ -947,7 +945,7 @@ class RatemeterPage(QWidget):
     # ------------------------------------------------------------------
 
     def _update_plot_axes(self) -> None:
-        voltage_range_v = _VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02)
+        voltage_range_v = self._current_true_voltage_range_v()
         range_mv = voltage_range_v * 1000
         self.plot_widget.setYRange(-range_mv, range_mv, padding=0)
         window_us = self.spin_window.value() * 1000
@@ -1122,7 +1120,7 @@ class RatemeterPage(QWidget):
                 duration_s=float(self.spin_timed_duration.value()),
                 total_peak_count=len(self._timed_peak_buffer),
                 channel=self.combo_channel.currentText(),
-                voltage_range_v=_VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02),
+                voltage_range_v=self._current_true_voltage_range_v(),
                 coupling=self.combo_coupling.currentText(),
                 sample_interval_ns=_SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200),
                 window_duration_ms=self.spin_window.value(),
@@ -1374,8 +1372,38 @@ class RatemeterPage(QWidget):
     # Config building
     # ------------------------------------------------------------------
 
+    def _current_probe_factor(self) -> float:
+        return PROBE_FACTORS.get(self.combo_probe.currentText(), 1.0)
+
+    def _current_true_voltage_range_v(self) -> float:
+        native_v = self.combo_range.currentData()
+        if native_v is None:
+            native_v = 0.02
+        return native_v * self._current_probe_factor()
+
+    def _populate_range_combo(self) -> None:
+        """(Re)populate combo_range using the current probe factor. Labels are
+        true (probe-scaled) volts; itemData is the native hardware range sent
+        to the PicoScope."""
+        preserve_native = self.combo_range.currentData() if self.combo_range.count() else None
+        factor = self._current_probe_factor()
+        self.combo_range.blockSignals(True)
+        self.combo_range.clear()
+        for native_v in NATIVE_VOLTAGE_RANGES_V:
+            self.combo_range.addItem(format_voltage_label(native_v * factor), native_v)
+        if preserve_native is not None:
+            idx = self.combo_range.findData(preserve_native)
+            self.combo_range.setCurrentIndex(idx if idx >= 0 else 0)
+        self.combo_range.blockSignals(False)
+
+    def _on_probe_changed(self) -> None:
+        self._populate_range_combo()
+        self._schedule_restart()
+
     def _build_config(self) -> RatemeterConfig:
-        voltage_range_v = _VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02)
+        voltage_range_v = self.combo_range.currentData()
+        if voltage_range_v is None:
+            voltage_range_v = 0.02
         sample_interval_ns = _SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200)
         width_rel_height = _WIDTH_REL_HEIGHT_MAP.get(
             self.combo_width_rel_height.currentIndex(), 0.5
@@ -1391,6 +1419,7 @@ class RatemeterPage(QWidget):
             electrode_length_m=0.03302,
             width_rel_height=width_rel_height,
             bandwidth_limit_enabled=self.chk_bandwidth_limit.isChecked(),
+            probe_factor=self._current_probe_factor(),
         )
 
     def _build_mf_config(self) -> MatchedFilterConfig:
@@ -1449,8 +1478,13 @@ class RatemeterPage(QWidget):
     def _load_settings(self) -> None:
         s = self._settings
 
+        # Probe must be restored before the range selection below, since the
+        # range combo's labels/options depend on which probe is active.
+        self.combo_probe.setCurrentText(s.value("ratemeter/probe", "x1", type=str))
+
         range_v = s.value("ratemeter/voltage_range_v", 0.02, type=float)
-        self.combo_range.setCurrentText(self._label_for_value(_VOLTAGE_RANGES, range_v, "±20 mV"))
+        idx = self.combo_range.findData(range_v)
+        self.combo_range.setCurrentIndex(idx if idx >= 0 else 0)
 
         interval_ns = s.value("ratemeter/sample_interval_ns", 200, type=int)
         self.combo_interval.setCurrentText(
@@ -1547,7 +1581,9 @@ class RatemeterPage(QWidget):
 
     def _save_settings(self) -> None:
         s = self._settings
-        s.setValue("ratemeter/voltage_range_v", _VOLTAGE_RANGES.get(self.combo_range.currentText(), 0.02))
+        s.setValue("ratemeter/probe", self.combo_probe.currentText())
+        native_v = self.combo_range.currentData()
+        s.setValue("ratemeter/voltage_range_v", native_v if native_v is not None else 0.02)
         s.setValue("ratemeter/sample_interval_ns", _SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200))
         s.setValue("ratemeter/window_duration_ms", self.spin_window.value())
         s.setValue("ratemeter/coupling", self.combo_coupling.currentText())

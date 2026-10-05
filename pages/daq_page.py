@@ -62,23 +62,13 @@ from instrument_app.services.daq_models import (
     WaveformRecord,
 )
 from instrument_app.services.picoscope_service import PicoScopeService
+from instrument_app.services.probe_config import (
+    NATIVE_VOLTAGE_RANGES_V,
+    PROBE_FACTORS,
+    format_voltage_label,
+)
 from instrument_app.services.waveform_processor import WaveformProcessor
 from instrument_app.theme.style import style
-
-
-# Voltage range options (display label → float value in volts)
-_VOLTAGE_RANGES = {
-    "±10 mV":  0.01,
-    "±20 mV":  0.02,
-    "±50 mV":  0.05,
-    "±100 mV": 0.1,
-    "±200 mV": 0.2,
-    "±500 mV": 0.5,
-    "±1 V":    1.0,
-    "±2 V":    2.0,
-    "±5 V":    5.0,
-    "±10 V":   10.0,
-}
 
 # Plot update rate cap (seconds between plot refreshes)
 _PLOT_MIN_INTERVAL_S = 0.1  # 10 Hz
@@ -178,11 +168,18 @@ class DAQPage(QWidget):
         self.combo_channel.addItems(["A", "B"])
         lay.addWidget(self.combo_channel)
 
+        # Probe
+        lay.addWidget(QLabel("Probe:"))
+        self.combo_probe = QComboBox()
+        self.combo_probe.addItems(list(PROBE_FACTORS.keys()))
+        self.combo_probe.setCurrentText("x1")
+        self.combo_probe.currentIndexChanged.connect(self._on_probe_changed)
+        lay.addWidget(self.combo_probe)
+
         # Voltage range
         lay.addWidget(QLabel("Voltage range:"))
         self.combo_range = QComboBox()
-        for label in _VOLTAGE_RANGES:
-            self.combo_range.addItem(label)
+        self._populate_range_combo()
         self.combo_range.setCurrentText("±2 V")
         lay.addWidget(self.combo_range)
 
@@ -638,9 +635,31 @@ class DAQPage(QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _current_probe_factor(self) -> float:
+        return PROBE_FACTORS.get(self.combo_probe.currentText(), 1.0)
+
+    def _populate_range_combo(self) -> None:
+        """(Re)populate combo_range using the current probe factor. Labels are
+        true (probe-scaled) volts; itemData is the native hardware range sent
+        to the PicoScope."""
+        preserve_native = self.combo_range.currentData() if self.combo_range.count() else None
+        factor = self._current_probe_factor()
+        self.combo_range.blockSignals(True)
+        self.combo_range.clear()
+        for native_v in NATIVE_VOLTAGE_RANGES_V:
+            self.combo_range.addItem(format_voltage_label(native_v * factor), native_v)
+        if preserve_native is not None:
+            idx = self.combo_range.findData(preserve_native)
+            self.combo_range.setCurrentIndex(idx if idx >= 0 else 0)
+        self.combo_range.blockSignals(False)
+
+    def _on_probe_changed(self) -> None:
+        self._populate_range_combo()
+
     def _build_config(self) -> AcquisitionConfig:
-        range_label = self.combo_range.currentText()
-        voltage_range_v = _VOLTAGE_RANGES.get(range_label, 2.0)
+        voltage_range_v = self.combo_range.currentData()
+        if voltage_range_v is None:
+            voltage_range_v = 2.0
         return AcquisitionConfig(
             channel=self.combo_channel.currentText(),
             voltage_range_v=voltage_range_v,
@@ -648,6 +667,7 @@ class DAQPage(QWidget):
             sample_interval_ns=self.spin_interval.value(),
             num_samples=self.spin_samples.value(),
             invert_polarity=self.chk_invert.isChecked(),
+            probe_factor=self._current_probe_factor(),
         )
 
     def _build_cdms_config(self) -> CDMSConfig:

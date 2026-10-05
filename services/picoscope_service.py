@@ -205,7 +205,9 @@ class PicoScopeService:
             return
 
         threshold_v = config.trigger_threshold_v or 0.0
-        threshold_adc = int(threshold_v / config.voltage_range_v * _ADC_MAX)
+        # threshold_v is the desired true (probe-scaled) trigger level; convert
+        # back to native scope-input volts before the ADC-count math.
+        threshold_adc = int((threshold_v / config.probe_factor) / config.voltage_range_v * _ADC_MAX)
         threshold_adc = max(-_ADC_MAX, min(_ADC_MAX, threshold_adc))
 
         direction_enum = _DIRECTION_MAP.get(config.trigger_direction.upper(), 2)
@@ -311,8 +313,8 @@ class PicoScopeService:
         n = n_values.value
         raw = np.frombuffer(buffer, dtype=np.int16, count=n).astype(np.float64)
 
-        # ADC â†' volts
-        voltage = raw / _ADC_MAX * config.voltage_range_v
+        # ADC â†' volts (true, probe-scaled volts — see services/probe_config.py)
+        voltage = raw / _ADC_MAX * config.voltage_range_v * config.probe_factor
         if config.invert_polarity:
             voltage = -voltage
 
@@ -437,7 +439,7 @@ class PicoScopeService:
         for segment_index, buffer in enumerate(buffers):
             raw = np.frombuffer(buffer, dtype=np.int16, count=n).astype(np.float64)
 
-            voltage = raw / _ADC_MAX * config.voltage_range_v
+            voltage = raw / _ADC_MAX * config.voltage_range_v * config.probe_factor
             if config.invert_polarity:
                 voltage = -voltage
 

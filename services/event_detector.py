@@ -94,7 +94,9 @@ class EventDetector:
             accepted is True for CLASS_POSSIBLE and CLASS_LIKELY_ION.
         """
         voltage = record.voltage
-        voltage_range_v = record.config.voltage_range_v
+        # record.voltage is already true (probe-scaled) volts — compare against
+        # the matching true clipping threshold, not the raw native range.
+        voltage_range_v = record.config.voltage_range_v * record.config.probe_factor
 
         # --- Rule 1: overload / clipping ---
         if WaveformProcessor.is_clipped(voltage, voltage_range_v):
