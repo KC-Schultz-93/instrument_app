@@ -214,6 +214,10 @@ class RatemeterPage(QWidget):
         self._timed_peak_buffer: List[PeakRecord] = []
 
         self._settings = QSettings(_APP_ORG, _APP_NAME)
+        # True while _load_settings() runs: widget setters fire signals that
+        # call _save_settings(), which would overwrite not-yet-loaded keys
+        # with widget defaults.
+        self._loading_settings = False
 
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
@@ -1476,6 +1480,13 @@ class RatemeterPage(QWidget):
     # ------------------------------------------------------------------
 
     def _load_settings(self) -> None:
+        self._loading_settings = True
+        try:
+            self._load_settings_impl()
+        finally:
+            self._loading_settings = False
+
+    def _load_settings_impl(self) -> None:
         s = self._settings
 
         # Probe must be restored before the range selection below, since the
@@ -1580,6 +1591,8 @@ class RatemeterPage(QWidget):
         return default_label
 
     def _save_settings(self) -> None:
+        if self._loading_settings:
+            return
         s = self._settings
         s.setValue("ratemeter/probe", self.combo_probe.currentText())
         native_v = self.combo_range.currentData()
