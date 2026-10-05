@@ -138,6 +138,15 @@ _DETECTION_MODE_SIMPLE = "Simple threshold"
 _DETECTION_MODE_MATCHED_FILTER = "Matched filter (bipolar)"
 
 
+class _FixedHeightGrid(QGridLayout):
+    """Grid that never reports height-for-width. Word-wrapped labels would
+    otherwise make MainWindow's QScrollArea size this page to a large
+    height-for-width value instead of fitting it to the window."""
+
+    def hasHeightForWidth(self) -> bool:
+        return False
+
+
 class TimedRecordingMetadataDialog(QDialog):
     """Prompts for run metadata after a timed-recording window completes."""
 
@@ -280,7 +289,7 @@ class RatemeterPage(QWidget):
         self._tiles["captures"].step_down.connect(lambda: self.spin_captures_per_batch.stepBy(-1))
         self._tiles["captures"].step_up.connect(lambda: self.spin_captures_per_batch.stepBy(+1))
 
-        grid = QGridLayout(self)
+        grid = _FixedHeightGrid(self)
         grid.setContentsMargins(6, 6, 6, 6)
         grid.setSpacing(6)
         grid.setColumnMinimumWidth(0, _RAIL_WIDTH)
@@ -658,7 +667,7 @@ class RatemeterPage(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for col in (1, 2, 3, 4):
             header.setSectionResizeMode(col, QHeaderView.Stretch)
-        self.table_bands.setMinimumHeight(110)
+        self.table_bands.setMinimumHeight(60)
         self.table_bands.itemChanged.connect(self._on_band_item_changed)
         self.table_bands.cellDoubleClicked.connect(self._on_band_cell_double_clicked)
         lay.addWidget(self.table_bands)
@@ -733,9 +742,13 @@ class RatemeterPage(QWidget):
         vsplit = QSplitter(Qt.Vertical)
         vsplit.addWidget(self._make_waveform_plot())
         vsplit.addWidget(self._make_trend_plot())
-        vsplit.setSizes([320, 250])
+        vsplit.addWidget(self._make_bottom_strip())
+        vsplit.setStretchFactor(0, 1)
+        vsplit.setStretchFactor(1, 1)
+        vsplit.setStretchFactor(2, 0)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setSizes([320, 250, _BOTTOM_STRIP_HEIGHT])
         lay.addWidget(vsplit, 1)
-        lay.addWidget(self._make_bottom_strip())
         return panel
 
     def _make_bottom_strip(self) -> QWidget:
@@ -743,7 +756,7 @@ class RatemeterPage(QWidget):
         strip = QWidget()
         strip.setObjectName("RmStrip")
         strip.setStyleSheet("#RmStrip{background:transparent;}")
-        strip.setFixedHeight(_BOTTOM_STRIP_HEIGHT)
+        strip.setMinimumHeight(130)
         lay = QHBoxLayout(strip)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)

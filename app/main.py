@@ -223,7 +223,11 @@ class MainWindow(QMainWindow):
         screen = self.screen() or QApplication.primaryScreen()
         if screen is not None:
             avail = screen.availableGeometry()
-            self.setMaximumSize(avail.width(), avail.height())
+            # The max applies to the client area, so leave room for the title
+            # bar / frame; otherwise a maximized window overflows the screen
+            # and Windows refuses to maximize it.
+            frame = self.frameGeometry().size() - self.geometry().size()
+            self.setMaximumSize(avail.width() - frame.width(), avail.height() - frame.height())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
