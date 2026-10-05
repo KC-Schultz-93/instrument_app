@@ -13,7 +13,8 @@ Wire format (INT_SYS/SerialInterface.cpp printCsvHeader/printCsvLineAveraged):
     fault_hornet,fault_system,maint
 
 Public API:
-- @dataclass Reading(t_s, uhv_torr, fore_torr, tg220, tg60, maint)
+- @dataclass Reading(t_s, uhv_torr, fore_torr, tg220, tg60, maint,
+                      rel_tg60, rel_tg220, rel_hornet, rel_test)
 - def parse_arduino_line(line: str) -> Optional[Reading]
 
 Changelog:
@@ -24,6 +25,8 @@ Changelog:
   any firmware in this repo.
 - 2026-09-21 · 0.3.0 · KC · Added maint field, read from column 14 (maint 1/0),
   so the UI can track/display MAINT-mode state.
+- 2026-09-30 · 0.4.0 · KC · Added rel_tg60/rel_tg220/rel_hornet/rel_test fields
+  (columns 8-11), so the MAINT control dialog can show live relay state.
 """
 
 from dataclasses import dataclass
@@ -37,6 +40,10 @@ class Reading:
     tg220: str
     tg60: str
     maint: bool = False
+    rel_tg60: bool = False
+    rel_tg220: bool = False
+    rel_hornet: bool = False
+    rel_test: bool = False
 
 def _clean_float(token: str) -> Optional[float]:
     token = token.replace(" Torr","").replace(" TORR","").strip()
@@ -58,7 +65,11 @@ def parse_arduino_line(line: str) -> Optional[Reading]:
         fore = _clean_float(parts[4])  # fore_Torr
         tg60 = "Normal" if parts[6].strip().upper() == "OK" else "Fault"
         tg220 = "Normal" if parts[7].strip().upper() == "OK" else "Fault"
+        rel_tg60 = parts[8].strip() == "1" if len(parts) > 8 else False
+        rel_tg220 = parts[9].strip() == "1" if len(parts) > 9 else False
+        rel_hornet = parts[10].strip() == "1" if len(parts) > 10 else False
+        rel_test = parts[11].strip() == "1" if len(parts) > 11 else False
         maint = parts[14].strip() == "1" if len(parts) > 14 else False
-        return Reading(t, uhv, fore, tg220, tg60, maint)
+        return Reading(t, uhv, fore, tg220, tg60, maint, rel_tg60, rel_tg220, rel_hornet, rel_test)
     except Exception:
         return None

@@ -31,6 +31,12 @@ Changelog:
   Foreline CSVs, replacing DataRecorder's single-file-per-session scheme);
   added long time-window presets + custom-hours spinbox and a smoothed-trend
   toggle to match an example DAQ program's plot.
+- 2026-09-30 · 0.4.0 · KC · Edited despite CLAUDE.md's "do not touch" note, with
+  explicit user go-ahead: removed the per-pump RUN/STOP buttons (the firmware
+  has no per-pump control - they were misleading) in favor of dedicated START
+  SYSTEM/STOP SYSTEM buttons; MAINT button now opens/reopens a MaintenanceDialog
+  for manual relay control instead of just toggling the mode with no way to
+  act on it.
 """
 
 
@@ -49,6 +55,7 @@ from instrument_app.ui import (
     PortToolbar, PressureCard, PumpCard, PillLabel, ThemedButton, TimePressureView,
 )
 from instrument_app.services.parsing import Reading
+from instrument_app.pages.maintenance_dialog import MaintenanceDialog
 
 # Preset time windows shown in the range dropdown, mapped to hours.
 _TIME_WINDOWS_HOURS = {
@@ -71,6 +78,7 @@ class PressureInterlockPage(QWidget):
         self.recorder = recorder
         self._maint_active = False
         self._start_time: float | None = None
+        self._maint_dialog: MaintenanceDialog | None = None
 
         grid = QGridLayout(self)
         grid.setContentsMargins(10, 8, 10, 10)
@@ -126,17 +134,17 @@ class PressureInterlockPage(QWidget):
         self.card_uhv = PressureCard("UHV Pressure")
         self.card_tg60 = PumpCard("TG60")
         self.card_tg220 = PumpCard("TG220")
-        for card in (self.card_tg60, self.card_tg220):
-            # The firmware has one system-wide start/stop, not per-pump control -
-            # both cards' buttons send the same S/X command.
-            card.btn_run.setToolTip("Sends system START (S) - starts both pumps")
-            card.btn_stop.setToolTip("Sends system STOP (X) - stops both pumps")
-            card.btn_run.clicked.connect(lambda _=False: self.serial.send_command("S"))
-            card.btn_stop.clicked.connect(lambda _=False: self.serial.send_command("X"))
         left.addWidget(self.card_fore)
         left.addWidget(self.card_uhv)
         left.addWidget(self.card_tg60)
         left.addWidget(self.card_tg220)
+
+        system_row = QHBoxLayout(); system_row.setSpacing(8)
+        self.btn_start_system = ThemedButton("START SYSTEM", height=34)
+        self.btn_stop_system = ThemedButton("STOP SYSTEM", height=34)
+        system_row.addWidget(self.btn_start_system)
+        system_row.addWidget(self.btn_stop_system)
+        left.addLayout(system_row)
 
         maint_row = QHBoxLayout(); maint_row.setSpacing(8)
         self.btn_maint = ThemedButton("Enter MAINT", height=34)
@@ -180,7 +188,9 @@ class PressureInterlockPage(QWidget):
         self.chk_smoothed.stateChanged.connect(self._on_smoothed_toggled)
         self.chk_smoothed_only.stateChanged.connect(self._on_smoothed_only_toggled)
         self.btn_reset.clicked.connect(getattr(self.plot, "reset_view", lambda: None))
-        self.btn_maint.clicked.connect(self._toggle_maint)
+        self.btn_start_system.clicked.connect(lambda: self.serial.send_command("S"))
+        self.btn_stop_system.clicked.connect(lambda: self.serial.send_command("X"))
+        self.btn_maint.clicked.connect(self._on_maint_button_clicked)
         self.btn_clear_fault.clicked.connect(lambda: self.serial.send_command("R"))
 
         self.serial.reading.connect(self._on_reading)
@@ -225,6 +235,8 @@ class PressureInterlockPage(QWidget):
         self._set_dot(self.card_tg220.dot, getattr(r, "tg220", ""))
         self._set_dot(self.card_tg60.dot, getattr(r, "tg60", ""))
         self._set_maint_state(bool(getattr(r, "maint", False)))
+        if self._maint_dialog is not None:
+            self._maint_dialog.update_from_reading(r)
         self.plot.append(r)
         if self._start_time is None:
             self._start_time = time.time()
@@ -253,21 +265,30 @@ class PressureInterlockPage(QWidget):
         self.recorder.close()
         super().closeEvent(event)
 
-    def _toggle_maint(self) -> None:
-        # Entering/exiting MAINT both use the same 'M' command: a first 'M' arms
-        # it, a second 'M' within 5s enters/exits it (INT_SYS/MaintenanceMode.cpp).
-        # Sending two back-to-back always satisfies that window.
-        self.serial.send_command("M")
-        self.serial.send_command("M")
+    def _on_maint_button_clicked(self) -> None:
+        if not self._maint_active:
+            # A first 'M' arms MAINT, a second within 5s enters it
+            # (INT_SYS/MaintenanceMode.cpp) - sending two back-to-back
+            # always satisfies that window.
+            self.serial.send_command("M")
+            self.serial.send_command("M")
+        if self._maint_dialog is None:
+            self._maint_dialog = MaintenanceDialog(self.serial, self)
+            self._maint_dialog.set_maint_active(self._maint_active)
+        self._maint_dialog.show()
+        self._maint_dialog.raise_()
+        self._maint_dialog.activateWindow()
 
     def _set_maint_state(self, active: bool) -> None:
         if active == self._maint_active:
             return
         self._maint_active = active
-        self.btn_maint.setText("Exit MAINT" if active else "Enter MAINT")
+        self.btn_maint.setText("Show MAINT Controls" if active else "Enter MAINT")
         self.maint_indicator.setText("MAINT: ON" if active else "MAINT: OFF")
         self.maint_indicator.set_roles(lambda t: t.BAD if active else t.GOOD)
         self.btn_clear_fault.setEnabled(not active)
+        if self._maint_dialog is not None:
+            self._maint_dialog.set_maint_active(active)
 
     def _set_dot(self, dot, status: str) -> None:
         s = (status or "").lower()

@@ -32,6 +32,27 @@ def test_data_line_maint_on():
     print("  data line, maint=1:  PASS")
 
 
+def test_data_line_relay_states():
+    # _DATA_LINE columns 8-11 (rel_tg60,rel_tg220,rel_hornet,rel_test) = 1,1,1,0
+    r = parse_arduino_line(_DATA_LINE.format(maint=0))
+    assert r.rel_tg60 is True
+    assert r.rel_tg220 is True
+    assert r.rel_hornet is True
+    assert r.rel_test is False
+    print("  relay states (rel_tg60/rel_tg220/rel_hornet/rel_test):  PASS")
+
+
+def test_data_line_missing_relay_columns():
+    # Short line (no relay columns at all) - should still parse, defaulting
+    # all relay fields to False rather than raising.
+    r = parse_arduino_line("12345,1.2340,0.5670,1.23e-04,5.67e-03,RUN,OK,NO")
+    assert r.rel_tg60 is False
+    assert r.rel_tg220 is False
+    assert r.rel_hornet is False
+    assert r.rel_test is False
+    print("  short line (no relay columns) defaults to False:  PASS")
+
+
 def test_data_line_maint_off():
     r = parse_arduino_line(_DATA_LINE.format(maint=0))
     assert r.maint is False
@@ -66,6 +87,8 @@ if __name__ == "__main__":
     print("=" * 60)
     test_data_line_maint_on()
     test_data_line_maint_off()
+    test_data_line_relay_states()
+    test_data_line_missing_relay_columns()
     test_data_line_missing_maint_column()
     test_firmware_log_line_is_not_data()
     test_csv_header_is_not_data()

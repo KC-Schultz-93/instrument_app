@@ -55,7 +55,9 @@ class PressureCard(QFrame, ThemedMixin):
 
 
 class PumpCard(QFrame, ThemedMixin):
-    """Card containing run/stop controls for a pump."""
+    """Card showing a pump's live OK status (no per-pump control exists in
+    the firmware - start/stop is system-wide, see PressureInterlockPage's
+    START SYSTEM/STOP SYSTEM buttons)."""
 
     def __init__(self, name: str, parent: Optional[QWidget] = None):
         QFrame.__init__(self, parent)
@@ -71,14 +73,9 @@ class PumpCard(QFrame, ThemedMixin):
         self.dot = IconDot()
         head.addWidget(self.caption); head.addStretch(1); head.addWidget(self.dot)
 
-        btnrow = QHBoxLayout(); btnrow.setSpacing(8)
-        self.btn_run = ThemedButton("RUN", height=32)
-        self.btn_stop = ThemedButton("STOP", height=32)
-        btnrow.addWidget(self.btn_run); btnrow.addWidget(self.btn_stop)
-
         lay.addLayout(head)
-        lay.addLayout(btnrow)
-        
+        lay.addStretch(1)
+
         ThemedMixin.__init__(self)
 
     def apply_theme(self, t: Theme) -> None:  # pragma: no cover - trivial
