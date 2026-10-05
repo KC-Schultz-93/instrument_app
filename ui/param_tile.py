@@ -31,7 +31,8 @@ class ParamTile(QFrame, ThemedMixin):
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self._open = False
         self._warn = False
-        self._warn_color = "#ff4136"
+        self._theme: Theme = theme_mgr.current
+        self.setMinimumHeight(72)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 4, 8, 4)
@@ -50,6 +51,7 @@ class ParamTile(QFrame, ThemedMixin):
         self.btn_plus.clicked.connect(self.step_up)
         self._primary = QLabel("")
         self._primary.setAlignment(Qt.AlignCenter)
+        self._primary.setWordWrap(True)
         if stepper:
             row.addWidget(self.btn_minus)
         row.addWidget(self._primary, 1)
@@ -69,7 +71,7 @@ class ParamTile(QFrame, ThemedMixin):
             lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         ThemedMixin.__init__(self)
-        self.apply_theme(theme_mgr.current)
+        self.apply_theme(self._theme)
 
     # -- public API ------------------------------------------------------
 
@@ -87,14 +89,14 @@ class ParamTile(QFrame, ThemedMixin):
             if i < len(secondary):
                 lbl.setText(secondary[i])
         self._warn = warn
-        self.apply_theme(theme_mgr.current)
+        self.apply_theme(self._theme)
 
     def primary_text(self) -> str:
         return self._primary.text()
 
     def set_open(self, is_open: bool) -> None:
         self._open = is_open
-        self.apply_theme(theme_mgr.current)
+        self.apply_theme(self._theme)
 
     def is_open(self) -> bool:
         return self._open
@@ -109,6 +111,7 @@ class ParamTile(QFrame, ThemedMixin):
     # -- theming ---------------------------------------------------------
 
     def apply_theme(self, t: Theme) -> None:
+        self._theme = t
         bg = t.BTN_BG_DOWN if self._open else t.BTN_BG
         border = t.GOOD if self._open else t.BTN_BORDER
         self.setStyleSheet(

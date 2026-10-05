@@ -9,11 +9,13 @@ visual confirmation. No data logging, no CDMS physics, stateless between runs.
 
 Layout
 ------
-Horizontal splitter:
-  Left panel  (fixed 320 px, scrollable) — connection, acquisition, trigger,
-                                            averaging, bands, run controls
-  Right panel (expandable)               — waveform plot, live rate display,
-                                            rate trend plot
+PicoScope-style tiles + one docked option panel (see docs/ratemeter_ui.md):
+  Top-left    status block (lbl_status, lbl_trace_count)
+  Top bar     Scope / Trigger / Captures tiles, Connect and Run switches
+  Left rail   Channel / Detection / Rates tiles, Data Recorder pinned below
+  Dock        ~320 px, one panel at a time, opened by clicking a tile
+  Plots       waveform + rate trend (vertical splitter)
+  Bottom      editable band table (left), live band readouts (right)
 
 Threading model
 ----------------
@@ -45,6 +47,7 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -81,7 +84,7 @@ from instrument_app.services.ratemeter_logger import RatemeterLogger
 from instrument_app.services.ratemeter_worker import RatemeterWorker
 from instrument_app.services.timed_recording_logger import TimedRecordingLogger
 from instrument_app.theme.style import style
-from instrument_app.ui import CollapsibleBox
+from instrument_app.ui import CardFrame, DockHost, ParamTile, ToggleSwitch
 
 
 # Same org/app identity as app/main.py's QSettings(APP_ORG, APP_NAME).
@@ -114,6 +117,9 @@ _BAND_COLORS = [
     "#80cbc4",  # teal
     "#ffcc80",  # amber
 ]
+
+_RAIL_WIDTH = 270
+_BOTTOM_STRIP_HEIGHT = 200
 
 _PLOT_MIN_INTERVAL_S = 0.1  # 10 Hz waveform refresh cap
 _RESTART_DEBOUNCE_MS = 300
@@ -236,100 +242,153 @@ class RatemeterPage(QWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
+        # Build order matters: all panels (create the control widgets) -> tiles
+        # -> plots -> _load_settings(). Panel builders must not call
+        # _schedule_restart because the plots/band table don't exist yet.
+        self._tiles_ready = False
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._make_left_panel())
-        splitter.addWidget(self._make_right_panel())
-        splitter.setSizes([340, 900])
-        splitter.setChildrenCollapsible(False)
+        self.dock = DockHost()
+        panels = [
+            ("channel", "Channel", self._make_channel_panel()),
+            ("scope", "Scope", self._make_scope_panel()),
+            ("trigger", "Trigger", self._make_trigger_group()),
+            ("captures", "Captures", self._make_captures_panel()),
+            ("detection", "Detection", self._make_detection_mode_group()),
+            ("rates", "Rates", self._make_rates_panel()),
+        ]
+        for key, title, panel in panels:
+            panel.layout().addStretch()
+            self.dock.add_panel(key, title, panel)
 
-        root.addWidget(splitter)
-
-    def _make_left_panel(self) -> QWidget:
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        layout.addWidget(self._make_connection_group())
-
-        self._collapsible_sections: Dict[str, CollapsibleBox] = {
-            "acquisition": self._make_acquisition_group(),
-            "trigger": self._make_trigger_group(),
-            "detection_mode": self._make_detection_mode_group(),
-            "averaging": self._make_averaging_group(),
-            "bands": self._make_bands_group(),
-            "transit": self._make_transit_group(),
+        self._tiles: Dict[str, ParamTile] = {
+            "channel": ParamTile("Channel", stepper=True),
+            "scope": ParamTile("Scope", stepper=True),
+            "trigger": ParamTile("Trigger", stepper=True),
+            "captures": ParamTile("Captures", stepper=True),
+            "detection": ParamTile("Detection"),
+            "rates": ParamTile("Rates"),
         }
-        for key, box in self._collapsible_sections.items():
-            layout.addWidget(box)
-            box.toggled.connect(lambda _checked, k=key: self._save_settings())
+        for key, tile in self._tiles.items():
+            tile.clicked.connect(lambda k=key: self.dock.toggle(k))
+        self.dock.changed.connect(self._on_dock_changed)
+        self._tiles["channel"].step_down.connect(lambda: self._step_range(-1))
+        self._tiles["channel"].step_up.connect(lambda: self._step_range(+1))
+        self._tiles["scope"].step_down.connect(lambda: self._step_window(-1))
+        self._tiles["scope"].step_up.connect(lambda: self._step_window(+1))
+        self._tiles["trigger"].step_down.connect(lambda: self._step_trigger(-1))
+        self._tiles["trigger"].step_up.connect(lambda: self._step_trigger(+1))
+        self._tiles["captures"].step_down.connect(lambda: self.spin_captures_per_batch.stepBy(-1))
+        self._tiles["captures"].step_up.connect(lambda: self.spin_captures_per_batch.stepBy(+1))
 
-        layout.addWidget(self._make_control_group())
-        layout.addStretch()
+        grid = QGridLayout(self)
+        grid.setContentsMargins(6, 6, 6, 6)
+        grid.setSpacing(6)
+        grid.setColumnMinimumWidth(0, _RAIL_WIDTH)
+        grid.setColumnStretch(1, 1)
+        grid.setRowStretch(1, 1)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-        scroll.setMinimumWidth(320)
-        scroll.setMaximumWidth(640)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        # Fixed horizontal policy: only the splitter handle should change this
-        # panel's width. Without this, Qt redistributes extra space to it on
-        # any layout/window resize event, snapping it toward setMaximumWidth.
-        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        return scroll
+        grid.addWidget(self._make_status_block(), 0, 0)
+        grid.addWidget(self._make_top_bar(), 0, 1)
+        grid.addWidget(self._make_left_rail(), 1, 0)
 
-    def _make_connection_group(self) -> QGroupBox:
-        box = QGroupBox("PicoScope Connection")
-        lay = QVBoxLayout(box)
+        body = QHBoxLayout()
+        body.setSpacing(6)
+        body.addWidget(self.dock)
+        body.addWidget(self._make_right_panel(), 1)
+        grid.addLayout(body, 1, 1)
 
-        self.btn_connect = QPushButton("Connect")
-        self.btn_connect.clicked.connect(self._on_connect_clicked)
+        self._tiles_ready = True
+        self.spin_trend_window.valueChanged.connect(self._refresh_tiles)
+        self._refresh_tiles()
 
-        self.btn_disconnect = QPushButton("Disconnect")
-        self.btn_disconnect.clicked.connect(self._on_disconnect_clicked)
+    # -- layout pieces ---------------------------------------------------
 
-        btn_row = QHBoxLayout()
-        btn_row.addWidget(self.btn_connect)
-        btn_row.addWidget(self.btn_disconnect)
-        lay.addLayout(btn_row)
+    @staticmethod
+    def _make_panel():
+        """Plain themed-by-parent panel to hold one dock page's controls."""
+        panel = QWidget()
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(4)
+        return panel, lay
 
+    def _make_status_block(self) -> QWidget:
+        card = CardFrame()
+        card.setFixedWidth(_RAIL_WIDTH)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(2)
+
+        self.lbl_status = QLabel("Idle")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        self.lbl_status.setWordWrap(True)
+        self.lbl_trace_count = QLabel("Traces:  0")
+        self.lbl_trace_count.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.lbl_status)
+        lay.addWidget(self.lbl_trace_count)
+        self._set_status("Idle")
+        return card
+
+    def _make_top_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("RmTopBar")
+        bar.setStyleSheet("#RmTopBar{background:transparent;}")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        for key in ("scope", "trigger", "captures"):
+            lay.addWidget(self._tiles[key])
+        lay.addStretch(1)
+
+        self.sw_connect = ToggleSwitch()
+        self.sw_connect.clicked.connect(self._on_connect_switch)
         self.lbl_connection = QLabel("Disconnected")
-        self.lbl_connection.setAlignment(Qt.AlignCenter)
         self._set_label_bad(self.lbl_connection, "Disconnected")
-        lay.addWidget(self.lbl_connection)
+        self.sw_run = ToggleSwitch()
+        self.sw_run.clicked.connect(self._on_run_switch)
 
-        return box
+        for text, sw, extra in (("Connect", self.sw_connect, self.lbl_connection), ("Run", self.sw_run, None)):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            lbl = QLabel(text)
+            lbl.setStyleSheet("background:transparent; font:bold 10pt 'Segoe UI';")
+            row.addWidget(lbl)
+            row.addWidget(sw)
+            col.addLayout(row)
+            if extra is not None:
+                extra.setStyleSheet(extra.styleSheet() + " background:transparent; font-size:8pt;")
+                col.addWidget(extra, 0, Qt.AlignRight)
+            lay.addLayout(col)
+        return bar
 
-    def _make_acquisition_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Acquisition")
-        lay = box.content_layout
+    def _make_left_rail(self) -> QWidget:
+        rail = QWidget()
+        rail.setObjectName("RmRail")
+        rail.setStyleSheet("#RmRail{background:transparent;}")
+        rail.setFixedWidth(_RAIL_WIDTH)
+        lay = QVBoxLayout(rail)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        for key in ("channel", "detection", "rates"):
+            lay.addWidget(self._tiles[key])
+        lay.addStretch(1)
+        lay.addWidget(self._make_recorder_group())
+        return rail
+
+    def _on_dock_changed(self, key) -> None:
+        for k, tile in self._tiles.items():
+            tile.set_open(k == key)
+
+    def _make_channel_panel(self) -> QWidget:
+        box, lay = self._make_panel()
 
         lay.addWidget(QLabel("Channel:"))
         self.combo_channel = QComboBox()
         self.combo_channel.addItems(["A", "B"])
         self.combo_channel.currentIndexChanged.connect(self._schedule_restart)
         lay.addWidget(self.combo_channel)
-
-        lay.addWidget(QLabel("Window duration (ms):"))
-        self.spin_window = QDoubleSpinBox()
-        self.spin_window.setRange(0.1, 1000.0)
-        self.spin_window.setDecimals(2)
-        self.spin_window.setValue(5.0)
-        self.spin_window.valueChanged.connect(self._schedule_restart)
-        self.spin_window.valueChanged.connect(self._update_mf_window_warning)
-        lay.addWidget(self.spin_window)
-
-        lay.addWidget(QLabel("Sample interval:"))
-        self.combo_interval = QComboBox()
-        for label in _SAMPLE_INTERVALS:
-            self.combo_interval.addItem(label)
-        self.combo_interval.setCurrentText("200 ns")
-        self.combo_interval.currentIndexChanged.connect(self._schedule_restart)
-        lay.addWidget(self.combo_interval)
 
         lay.addWidget(QLabel("Probe:"))
         self.combo_probe = QComboBox()
@@ -355,6 +414,33 @@ class RatemeterPage(QWidget):
         self.chk_bandwidth_limit.stateChanged.connect(self._schedule_restart)
         lay.addWidget(self.chk_bandwidth_limit)
 
+        return box
+
+    def _make_scope_panel(self) -> QWidget:
+        box, lay = self._make_panel()
+
+        lay.addWidget(QLabel("Window duration (ms):"))
+        self.spin_window = QDoubleSpinBox()
+        self.spin_window.setRange(0.1, 1000.0)
+        self.spin_window.setDecimals(2)
+        self.spin_window.setValue(5.0)
+        self.spin_window.valueChanged.connect(self._schedule_restart)
+        self.spin_window.valueChanged.connect(self._update_mf_window_warning)
+        lay.addWidget(self.spin_window)
+
+        lay.addWidget(QLabel("Sample interval:"))
+        self.combo_interval = QComboBox()
+        for label in _SAMPLE_INTERVALS:
+            self.combo_interval.addItem(label)
+        self.combo_interval.setCurrentText("200 ns")
+        self.combo_interval.currentIndexChanged.connect(self._schedule_restart)
+        lay.addWidget(self.combo_interval)
+
+        return box
+
+    def _make_captures_panel(self) -> QWidget:
+        box, lay = self._make_panel()
+
         lay.addWidget(QLabel("Captures per batch:"))
         self.spin_captures_per_batch = QSpinBox()
         self.spin_captures_per_batch.setRange(1, 1000)
@@ -364,9 +450,8 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_trigger_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Trigger")
-        lay = box.content_layout
+    def _make_trigger_group(self) -> QWidget:
+        box, lay = self._make_panel()
 
         self.chk_trigger_enable = QCheckBox("Enable")
         self.chk_trigger_enable.stateChanged.connect(self._on_trigger_enabled_changed)
@@ -402,9 +487,8 @@ class RatemeterPage(QWidget):
         self.spin_trigger_auto.setEnabled(enabled)
         return box
 
-    def _make_detection_mode_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Detection Mode")
-        lay = box.content_layout
+    def _make_detection_mode_group(self) -> QWidget:
+        box, lay = self._make_panel()
 
         lay.addWidget(QLabel("Mode:"))
         self.combo_detection_mode = QComboBox()
@@ -413,6 +497,8 @@ class RatemeterPage(QWidget):
         lay.addWidget(self.combo_detection_mode)
 
         self._mf_controls = QWidget()
+        self._mf_controls.setObjectName("MfControls")
+        self._mf_controls.setStyleSheet("#MfControls{background:transparent;}")
         mf_lay = QVBoxLayout(self._mf_controls)
         mf_lay.setContentsMargins(0, 0, 0, 0)
 
@@ -513,9 +599,9 @@ class RatemeterPage(QWidget):
         self._mf_controls.setVisible(False)
         return box
 
-    def _make_averaging_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Averaging")
-        lay = box.content_layout
+    def _make_rates_panel(self) -> QWidget:
+        """Rate averaging, trend window and transit-width settings."""
+        box, lay = self._make_panel()
 
         lay.addWidget(QLabel("Rate averaging window (s):"))
         self.spin_rate_avg = QSpinBox()
@@ -531,11 +617,37 @@ class RatemeterPage(QWidget):
         self.spin_trend_window.valueChanged.connect(self._save_settings)
         lay.addWidget(self.spin_trend_window)
 
+        lay.addWidget(QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]"))
+
+        lay.addWidget(QLabel("Measure width at:"))
+        self.combo_width_rel_height = QComboBox()
+        self.combo_width_rel_height.addItems([
+            "50%  (FWHM — default)",
+            "20%  (near base)",
+            "10%  (base width)",
+        ])
+        self.combo_width_rel_height.currentIndexChanged.connect(self._schedule_restart)
+        lay.addWidget(self.combo_width_rel_height)
+
+        note = QLabel(
+            "Set a minimum width in the Bands table to enable\n"
+            "transit % and velocity display for that band.\n"
+            "Signals below the threshold are counted as splat.\n"
+            "Ignored in Matched Filter mode — all matched-filter\n"
+            "events are classified as \"unknown\"."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        lay.addWidget(note)
+
         return box
 
-    def _make_bands_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Bands")
-        lay = box.content_layout
+    def _make_bands_group(self) -> QWidget:
+        box = QWidget()
+        box.setObjectName("RmBands")
+        box.setStyleSheet("#RmBands{background:transparent;}")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
 
         self.table_bands = QTableWidget(0, 5)
         self.table_bands.setHorizontalHeaderLabels(
@@ -545,7 +657,7 @@ class RatemeterPage(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         for col in (1, 2, 3, 4):
             header.setSectionResizeMode(col, QHeaderView.Stretch)
-        self.table_bands.setFixedHeight(160)
+        self.table_bands.setMinimumHeight(110)
         self.table_bands.itemChanged.connect(self._on_band_item_changed)
         self.table_bands.cellDoubleClicked.connect(self._on_band_cell_double_clicked)
         lay.addWidget(self.table_bands)
@@ -561,29 +673,9 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_control_group(self) -> QGroupBox:
-        box = QGroupBox("Run")
+    def _make_recorder_group(self) -> QGroupBox:
+        box = QGroupBox("Data Recorder")
         lay = QVBoxLayout(box)
-
-        self.btn_start = QPushButton("Start")
-        self.btn_start.clicked.connect(self._on_start_clicked)
-
-        self.btn_stop = QPushButton("Stop")
-        self.btn_stop.clicked.connect(self._on_stop_clicked)
-
-        self.lbl_status = QLabel("Idle")
-        self.lbl_status.setAlignment(Qt.AlignCenter)
-
-        self.lbl_trace_count = QLabel("Traces:  0")
-
-        lay.addWidget(self.btn_start)
-        lay.addWidget(self.btn_stop)
-        lay.addWidget(self.lbl_status)
-        lay.addWidget(self.lbl_trace_count)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        lay.addWidget(sep)
 
         self.btn_record = QPushButton("⏺  Record Data")
         self.btn_record.setCheckable(True)
@@ -629,49 +721,49 @@ class RatemeterPage(QWidget):
 
         return box
 
-    def _make_transit_group(self) -> CollapsibleBox:
-        box = CollapsibleBox("Transit Discrimination")
-        lay = box.content_layout
-
-        lay.addWidget(QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]"))
-
-        lay.addWidget(QLabel("Measure width at:"))
-        self.combo_width_rel_height = QComboBox()
-        self.combo_width_rel_height.addItems([
-            "50%  (FWHM — default)",
-            "20%  (near base)",
-            "10%  (base width)",
-        ])
-        self.combo_width_rel_height.currentIndexChanged.connect(self._schedule_restart)
-        lay.addWidget(self.combo_width_rel_height)
-
-        note = QLabel(
-            "Set a minimum width in the Bands table to enable\n"
-            "transit % and velocity display for that band.\n"
-            "Signals below the threshold are counted as splat.\n"
-            "Ignored in Matched Filter mode — all matched-filter\n"
-            "events are classified as \"unknown\"."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
-        lay.addWidget(note)
-
-        return box
-
     def _make_right_panel(self) -> QWidget:
         panel = QWidget()
+        panel.setObjectName("RmRight")
+        panel.setStyleSheet("#RmRight{background:transparent;}")
         lay = QVBoxLayout(panel)
-        lay.setContentsMargins(4, 0, 0, 0)
-        lay.setSpacing(0)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
 
         vsplit = QSplitter(Qt.Vertical)
         vsplit.addWidget(self._make_waveform_plot())
-        vsplit.addWidget(self._make_rates_frame())
         vsplit.addWidget(self._make_trend_plot())
-        vsplit.setSizes([320, 150, 250])
-
-        lay.addWidget(vsplit)
+        vsplit.setSizes([320, 250])
+        lay.addWidget(vsplit, 1)
+        lay.addWidget(self._make_bottom_strip())
         return panel
+
+    def _make_bottom_strip(self) -> QWidget:
+        """Band table (left) and live band readouts (right)."""
+        strip = QWidget()
+        strip.setObjectName("RmStrip")
+        strip.setStyleSheet("#RmStrip{background:transparent;}")
+        strip.setFixedHeight(_BOTTOM_STRIP_HEIGHT)
+        lay = QHBoxLayout(strip)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+
+        bands_card = CardFrame()
+        bands_lay = QVBoxLayout(bands_card)
+        bands_lay.setContentsMargins(6, 6, 6, 6)
+        bands_lay.addWidget(self._make_bands_group())
+        lay.addWidget(bands_card, 1)
+
+        rates_card = CardFrame()
+        rates_lay = QVBoxLayout(rates_card)
+        rates_lay.setContentsMargins(2, 2, 2, 2)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}")
+        scroll.setWidget(self._make_rates_frame())
+        rates_lay.addWidget(scroll)
+        lay.addWidget(rates_card, 1)
+        return strip
 
     def _make_waveform_plot(self) -> QWidget:
         self.plot_widget = pg.PlotWidget()
@@ -731,6 +823,8 @@ class RatemeterPage(QWidget):
 
     def _make_rates_frame(self) -> QWidget:
         self.rates_frame = QFrame()
+        self.rates_frame.setObjectName("RmRates")
+        self.rates_frame.setStyleSheet("#RmRates{background:transparent;}")
         self.rates_layout = QVBoxLayout(self.rates_frame)
         self.rates_layout.setContentsMargins(6, 6, 6, 6)
         self.rates_layout.setSpacing(4)
@@ -1015,7 +1109,7 @@ class RatemeterPage(QWidget):
         self._start_worker(config, self._build_mf_config())
         self.channels.daq_busy.emit(True)
         self._set_controls_running()
-        self.lbl_status.setText("Running")
+        self._set_status("Running")
 
     def _on_stop_clicked(self) -> None:
         self.stop_acquisition()
@@ -1038,7 +1132,7 @@ class RatemeterPage(QWidget):
 
         self.channels.daq_busy.emit(False)
         self._set_controls_idle()
-        self.lbl_status.setText("Stopped")
+        self._set_status("Stopped")
 
     def _start_worker(self, config: RatemeterConfig, mf_config: MatchedFilterConfig) -> None:
         trigger_enabled = self.chk_trigger_enable.isChecked()
@@ -1190,12 +1284,13 @@ class RatemeterPage(QWidget):
         self._start_worker(config, self._build_mf_config())
         if self._timed_recording_running:
             self._worker.raw_peaks_detected.connect(self._on_raw_peaks_for_timed_recording)
-        self.lbl_status.setText("Running")
+        self._set_status("Running")
 
     def _schedule_restart(self, *_args) -> None:
         self._update_plot_axes()
         self._update_trigger_line()
         self._save_settings()
+        self._refresh_tiles()
         if self._worker is not None:
             self._debounce_timer.start(_RESTART_DEBOUNCE_MS)
 
@@ -1259,6 +1354,7 @@ class RatemeterPage(QWidget):
     def _update_mf_window_warning(self, *_args) -> None:
         if self.combo_detection_mode.currentText() != _DETECTION_MODE_MATCHED_FILTER:
             self.lbl_mf_window_warning.setText("")
+            self._refresh_tiles()
             return
         largest_scale = max(self._parse_mf_scales() or [1.0])
         min_window_ms = self.spin_mf_pulse_max.value() * largest_scale * 3 / 1000.0
@@ -1269,6 +1365,7 @@ class RatemeterPage(QWidget):
             )
         else:
             self.lbl_mf_window_warning.setText("")
+        self._refresh_tiles()
 
     # ------------------------------------------------------------------
     # Worker signal slots (main thread)
@@ -1357,20 +1454,133 @@ class RatemeterPage(QWidget):
         self.lbl_trace_count.setText(f"Traces:  {count}")
 
     def _on_status(self, msg: str) -> None:
-        self.lbl_status.setText(msg)
+        self._set_status(msg)
 
     def _on_error(self, msg: str) -> None:
-        self.lbl_status.setText(f"Error: {msg}")
+        self._set_status(f"Error: {msg}")
 
     def _on_daq_busy(self, busy: bool) -> None:
-        """Disable Start when another page holds the PicoScope."""
+        """Disable Run when another page holds the PicoScope."""
         self._daq_busy = busy
         if busy and self._worker is None:
-            self.btn_start.setEnabled(False)
-            self.lbl_status.setText("PicoScope in use by DAQ")
+            self._set_status("PicoScope in use by DAQ")
         elif not busy and self._worker is None:
-            self.btn_start.setEnabled(self._service.is_connected)
-            self.lbl_status.setText("Idle")
+            self._set_status("Idle")
+        self._sync_switches()
+
+    # ------------------------------------------------------------------
+    # Tiles: summaries and -/+ steppers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_count(n: float, unit: str) -> str:
+        for scale, prefix in ((1e6, "M"), (1e3, "k")):
+            if n >= scale:
+                return f"{n / scale:.3g} {prefix}{unit}"
+        return f"{n:.3g} {unit}"
+
+    def _derived_scope_values(self):
+        """(samples per trace, sample rate in Hz) for the current Scope settings.
+        Samples matches RatemeterConfig.num_samples."""
+        interval_ns = _SAMPLE_INTERVALS.get(self.combo_interval.currentText(), 200)
+        samples = max(1, int(self.spin_window.value() * 1e6 / interval_ns))
+        return samples, 1e9 / interval_ns
+
+    def _refresh_tiles(self, *_args) -> None:
+        if not getattr(self, "_tiles_ready", False):
+            return
+        warn = bool(self.lbl_mf_window_warning.text())
+
+        channel = (
+            f"{self.combo_channel.currentText()}  {self.combo_coupling.currentText()}  "
+            f"{self.combo_probe.currentText()}  {self.combo_range.currentText()}"
+        )
+        self._tiles["channel"].set_values(
+            channel, ["BW limit 200 kHz"] if self.chk_bandwidth_limit.isChecked() else None
+        )
+
+        samples, rate_hz = self._derived_scope_values()
+        self._tiles["scope"].set_values(
+            f"{self.spin_window.value():g} ms",
+            [f"Samples {self._format_count(samples, 'S')}",
+             f"Rate {self._format_count(rate_hz, 'S/s')}"],
+            warn=warn,
+        )
+
+        if self.chk_trigger_enable.isChecked():
+            arrow = {"RISING": "↑", "FALLING": "↓"}.get(self._trigger_direction_value(), "⇅")
+            trig = f"{self.spin_trigger_threshold.value():g} mV {arrow}"
+        else:
+            trig = "Off"
+        self._tiles["trigger"].set_values(trig)
+        self._tiles["captures"].set_values(f"{self.spin_captures_per_batch.value()} / batch")
+
+        if self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER:
+            det = f"Matched filter · {self.spin_mf_pulse.value():g} µs · {self.spin_mf_threshold.value():.2f}"
+        else:
+            det = _DETECTION_MODE_SIMPLE
+        self._tiles["detection"].set_values(det, warn=warn)
+
+        width = ("FWHM", "20 %", "10 %")[max(0, min(2, self.combo_width_rel_height.currentIndex()))]
+        self._tiles["rates"].set_values(
+            f"{self.spin_rate_avg.value()} s avg · {self.spin_trend_window.value()} s trend · {width}"
+        )
+
+    def _step_range(self, direction: int) -> None:
+        idx = self.combo_range.currentIndex() + direction
+        if 0 <= idx < self.combo_range.count():
+            self.combo_range.setCurrentIndex(idx)
+
+    def _step_window(self, direction: int) -> None:
+        """Move the window duration to the next value on a 1-2-5 sequence."""
+        value = self.spin_window.value()
+        steps = [m * 10 ** e for e in range(-1, 4) for m in (1, 2, 5)]
+        if direction > 0:
+            target = next((s for s in steps if s > value * 1.0001), steps[-1])
+        else:
+            target = next((s for s in reversed(steps) if s < value * 0.9999), steps[0])
+        self.spin_window.setValue(target)
+
+    def _step_trigger(self, direction: int) -> None:
+        step_mv = self._current_true_voltage_range_v() * 1000 * 0.1
+        self.spin_trigger_threshold.setValue(self.spin_trigger_threshold.value() + direction * step_mv)
+
+    # ------------------------------------------------------------------
+    # Connect / Run switches
+    # ------------------------------------------------------------------
+
+    def _on_connect_switch(self, checked: bool) -> None:
+        (self._on_connect_clicked if checked else self._on_disconnect_clicked)()
+        self._sync_switches()
+
+    def _on_run_switch(self, checked: bool) -> None:
+        (self._on_start_clicked if checked else self._on_stop_clicked)()
+        self._sync_switches()
+
+    def _sync_switches(self) -> None:
+        """Set both switches from real state (never from what was clicked)."""
+        running = self._worker is not None
+        connected = self._service.is_connected
+        for sw, checked, enabled in (
+            (self.sw_connect, connected, not running),
+            (self.sw_run, running, running or (connected and not self._daq_busy)),
+        ):
+            sw.blockSignals(True)
+            sw.setChecked(checked)
+            sw.setEnabled(enabled)
+            sw.blockSignals(False)
+
+    def _set_status(self, text: str) -> None:
+        """Write the status label and colour it by state (idle/running/error)."""
+        self.lbl_status.setText(text)
+        if text.startswith("Error"):
+            color = style.BAD
+        elif self._worker is not None:
+            color = style.GOOD
+        else:
+            color = style.TXT_MUTED
+        self.lbl_status.setStyleSheet(f"color: {color}; font: bold 12pt 'Segoe UI';")
+        self.lbl_trace_count.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
 
     # ------------------------------------------------------------------
     # Config building
@@ -1449,21 +1659,14 @@ class RatemeterPage(QWidget):
     # ------------------------------------------------------------------
 
     def _set_controls_idle(self) -> None:
-        connected = self._service.is_connected
-        self.btn_connect.setEnabled(not connected)
-        self.btn_disconnect.setEnabled(connected)
-        self.btn_start.setEnabled(connected and not self._daq_busy)
-        self.btn_stop.setEnabled(False)
         self.btn_record.setEnabled(False)
         self.btn_timed_record.setEnabled(False)
+        self._sync_switches()
 
     def _set_controls_running(self) -> None:
-        self.btn_connect.setEnabled(False)
-        self.btn_disconnect.setEnabled(False)
-        self.btn_start.setEnabled(False)
-        self.btn_stop.setEnabled(True)
         self.btn_record.setEnabled(True)
         self.btn_timed_record.setEnabled(True)
+        self._sync_switches()
 
     @staticmethod
     def _set_label_good(label: QLabel, text: str) -> None:
@@ -1551,9 +1754,6 @@ class RatemeterPage(QWidget):
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
 
-        for key, box in self._collapsible_sections.items():
-            box.setExpanded(s.value(f"ratemeter/section_expanded_{key}", True, type=bool))
-
         self.spin_timed_duration.setValue(
             s.value("ratemeter/timed_recording_duration_s", 30, type=int)
         )
@@ -1562,6 +1762,7 @@ class RatemeterPage(QWidget):
         self._on_detection_mode_changed()
         self._update_plot_axes()
         self._rebuild_band_dependent_ui()
+        self._refresh_tiles()
 
     def _load_bands_from_json(self, raw: str) -> None:
         self.table_bands.blockSignals(True)
@@ -1633,8 +1834,6 @@ class RatemeterPage(QWidget):
         ]
         s.setValue("ratemeter/bands", json.dumps(bands))
 
-        for key, box in self._collapsible_sections.items():
-            s.setValue(f"ratemeter/section_expanded_{key}", box.isExpanded())
         s.setValue("ratemeter/timed_recording_duration_s", self.spin_timed_duration.value())
 
     # ------------------------------------------------------------------

@@ -166,3 +166,76 @@ def test_saved_key_set_is_stable(settings_env):
     s.sync()
     written = {k for k in s.allKeys() if not k.startswith("ratemeter/section_expanded_")}
     assert written == EXPECTED_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Tiles, dock and switches
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("interval", [10, 20, 40, 80, 200, 1000])
+def test_derived_scope_values_match_config(settings_env, interval):
+    page = make_page({"ratemeter/sample_interval_ns": interval, "ratemeter/window_duration_ms": 3.33})
+    samples, rate_hz = page._derived_scope_values()
+    assert samples == page._build_config().num_samples
+    assert rate_hz == pytest.approx(1e9 / interval)
+
+
+def test_tiles_show_loaded_values(settings_env):
+    page = make_page({
+        "ratemeter/probe": "x10", "ratemeter/voltage_range_v": 0.02,
+        "ratemeter/coupling": "AC", "ratemeter/trigger_enabled": True,
+        "ratemeter/trigger_threshold_mv": 6.0, "ratemeter/trigger_direction": "Falling",
+        "ratemeter/captures_per_batch": 3, "ratemeter/bandwidth_limit_enabled": True,
+    })
+    assert "AC" in page._tiles["channel"].primary_text() and "x10" in page._tiles["channel"].primary_text()
+    assert page._tiles["trigger"].primary_text() == "6 mV ↓"
+    assert page._tiles["captures"].primary_text() == "3 / batch"
+    assert page._tiles["scope"].primary_text() == "5 ms"
+
+
+def test_steppers_drive_existing_controls(settings_env):
+    page = make_page()
+    page._step_window(+1)
+    assert page.spin_window.value() == 10.0
+    page._step_window(-1)
+    page._step_window(-1)
+    assert page.spin_window.value() == 2.0
+    before = page.combo_range.currentIndex()
+    page._step_range(+1)
+    assert page.combo_range.currentIndex() == before + 1
+    assert "±" in page._tiles["channel"].primary_text()
+    page._tiles["captures"].step_up.emit()
+    assert page.spin_captures_per_batch.value() == 2
+
+
+def test_dock_opens_one_panel_and_marks_tile(settings_env):
+    page = make_page()
+    assert page.dock.current_key is None
+    page._tiles["trigger"].clicked.emit()
+    page._tiles["rates"].clicked.emit()
+    assert page.dock.current_key == "rates"
+    assert page._tiles["rates"].is_open() and not page._tiles["trigger"].is_open()
+    page._tiles["rates"].clicked.emit()
+    assert page.dock.current_key is None and not page._tiles["rates"].is_open()
+
+
+def test_switches_follow_real_state_on_failure(settings_env):
+    page = make_page()
+    assert not page.sw_connect.isChecked() and not page.sw_run.isEnabled()
+
+    def boom():
+        raise RuntimeError("no scope")
+    page._service.connect = boom
+    page.sw_connect.setChecked(True)          # what a click does before the handler runs
+    page._on_connect_switch(True)
+    assert not page.sw_connect.isChecked()    # snapped back
+    assert "Error" in page.lbl_status.text()
+
+    page._service = FakeService()
+    page._on_connect_switch(True)
+    assert page.sw_connect.isChecked() and page.sw_run.isEnabled()
+
+    page._on_daq_busy(True)
+    assert not page.sw_run.isEnabled()
+    page._on_daq_busy(False)
+    assert page.sw_run.isEnabled()

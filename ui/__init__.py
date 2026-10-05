@@ -19,11 +19,13 @@ from .collapsible_box import CollapsibleBox
 from .toggle_switch import ToggleSwitch
 from .param_tile import ParamTile
 from .dock_panel import DockHost
+from .card_frame import CardFrame
 
 __all__ = [
     "ToggleSwitch",
     "ParamTile",
     "DockHost",
+    "CardFrame",
     "ThemedButton",
     "PillLabel",
     "ValueDisplay",

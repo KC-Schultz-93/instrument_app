@@ -41,6 +41,8 @@ Rough effort
 
 Half a day to a day: new accumulator path in a worker (or a small recording-mode flag on the existing one), a completion dialog, CSV append logic, and the Recorded Data/Ratemeter/ folder convention.
 
+(Superseded by docs/ratemeter_ui.md — the collapsible left panel was replaced by tiles + a docked panel.)
+
 Part B: Collapsible left panel sections
 Problem
 
