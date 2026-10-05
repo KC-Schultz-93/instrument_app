@@ -206,9 +206,10 @@ class MatchedFilterConfig:
 
     enabled: bool = False
 
-    period_us: float = 85.0             # center estimate for template generation
-    period_min_us: float = 78.0         # validation window lower bound
-    period_max_us: float = 92.0         # validation window upper bound
+    # Pulse duration = peak-to-peak time of the bipolar pulse (half a sine period).
+    pulse_duration_us: float = 85.0     # nominal duration at scale 1.0
+    pulse_min_us: float = 60.0          # validation lower bound at scale 1.0
+    pulse_max_us: float = 110.0         # validation upper bound at scale 1.0
     polarity: str = "positive_first"    # "positive_first" | "negative_first" | "both"
 
     correlation_threshold: float = 0.35 # normalized cross-correlation score (0-1)
@@ -216,6 +217,9 @@ class MatchedFilterConfig:
 
     use_empirical_template: bool = False
     empirical_template_path: str = ""   # path to .npy file; ignored when disabled
+
+    # Template stretch factors swept per trace; duration bounds scale with each.
+    scale_factors: List[float] = field(default_factory=lambda: [1.0])
 
 
 @dataclass
@@ -226,8 +230,9 @@ class BipolarEventRecord:
     time_us: float            # time from trace start, microseconds
     amplitude_v: float        # larger-magnitude lobe near the event, baseline-corrected volts
     correlation_score: float  # normalized cross-correlation score at detection
-    period_us: float          # measured zero-crossing period of this event
+    period_us: float          # measured peak-to-peak pulse duration of this event
     polarity: str             # "positive_first" or "negative_first"
+    matched_scale: float = 1.0  # scale factor of the template that produced this hit
 
 
 @dataclass

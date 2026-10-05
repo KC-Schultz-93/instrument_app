@@ -588,3 +588,241 @@ Tests to cover:
    diagnostic tool. Do not write `BipolarEventRecord` data to disk. The
    amplitude value is consumed by the band system and discarded after rate
    calculation, same as `PeakRecord` in the simple threshold path.
+
+# Matched Filter — Multi-Scale Extension (Addendum)
+
+This document extends `match_filter.md` (above) with multi-scale template
+matching to handle particles with a wide range of transit times (pulse
+durations). The core matched filter architecture is unchanged; this adds a
+scale-loop around the existing `detect()` pipeline.
+
+## Background
+
+The empirical template (`template.npy`) was built from captures with pulse
+durations of approximately 75–90 µs (peak-to-peak). Particles traveling at
+different velocities produce the same bipolar shape but stretched or compressed
+in time. A scalar multiplier maps directly to the stretch factor:
+
+- `scale = 1.0` → template as-is (~85 µs pulse)
+- `scale = 2.0` → stretched to ~170 µs (slower particle)
+- `scale = 0.5` → compressed to ~42 µs (faster particle)
+
+Amplitude variation across particle sizes/charges is already handled by the
+normalized cross-correlation — the scale extension adds velocity-range coverage.
+
+---
+
+## Changes to `daq_models.py`
+
+Add `scale_factors` to `MatchedFilterConfig`:
+
+```python
+@dataclass
+class MatchedFilterConfig:
+    enabled: bool = False
+    pulse_duration_us: float = 85.0      # renamed from period_us — see note below
+    pulse_min_us: float = 60.0           # renamed from period_min_us
+    pulse_max_us: float = 110.0          # renamed from period_max_us
+    polarity: str = "positive_first"
+    correlation_threshold: float = 0.35
+    min_distance_us: float = 50.0
+    use_empirical_template: bool = False
+    empirical_template_path: str = ""
+    # --- NEW ---
+    scale_factors: List[float] = field(default_factory=lambda: [1.0])
+    # e.g. [0.5, 1.0, 1.5, 2.0] to sweep four candidate durations
+```
+
+**Naming note:** `period_us`, `period_min_us`, `period_max_us` should be
+renamed to `pulse_duration_us`, `pulse_min_us`, `pulse_max_us` throughout to
+reflect that this value is the full bipolar pulse duration (peak-to-peak time),
+which is a half-period in sine terms — not a full period. This prevents future
+confusion. Update all references in `matched_filter.py` and
+`ratemeter_page.py`.
+
+---
+
+## Changes to `services/matched_filter.py`
+
+### 1. Template rescaling
+
+Add a helper that resamples the template to a target length using
+`scipy.ndimage.zoom` (preserves shape better than simple slicing):
+
+```python
+from scipy.ndimage import zoom as ndimage_zoom
+
+def _scale_template(self, template: np.ndarray, scale: float) -> np.ndarray:
+    """
+    Stretch (scale > 1) or compress (scale < 1) the template by resampling.
+    Returns a zero-mean, unit-max normalized copy at the new length.
+    """
+    if abs(scale - 1.0) < 1e-6:
+        return template.copy()
+    scaled = ndimage_zoom(template, scale, order=3)   # cubic interpolation
+    scaled -= np.mean(scaled)
+    peak = np.max(np.abs(scaled))
+    if peak > 0:
+        scaled /= peak
+    return scaled.astype(np.float32)
+```
+
+### 2. Multi-scale `detect()` loop
+
+Replace the single-template correlation in `detect()` with a loop over
+`config.scale_factors`. For each candidate scale, run the full correlation and
+collect candidate hits. After all scales, merge hits (deduplication by
+proximity), then apply `min_distance_us` suppression on the merged list.
+
+```python
+def detect(self, waveform: np.ndarray, time_us: np.ndarray,
+           config: MatchedFilterConfig) -> List[BipolarEventRecord]:
+
+    waveform = self._preprocess(waveform)   # baseline subtract, existing method
+    all_candidates = []                      # (time_us, score, scale) tuples
+
+    for scale in config.scale_factors:
+        tmpl = self._scale_template(self._template, scale)
+        corr = self._normalized_correlate(waveform, tmpl)
+
+        # Expected pulse duration at this scale
+        expected_dur_us = self.config.pulse_duration_us * scale
+
+        # Find correlation peaks above threshold
+        min_dist_samples = int(config.min_distance_us /
+                               np.median(np.diff(time_us)))
+        peak_indices, props = scipy.signal.find_peaks(
+            corr,
+            height=config.correlation_threshold,
+            distance=max(1, min_dist_samples),
+        )
+
+        for idx in peak_indices:
+            # Period/duration gate: measure zero-crossing span at this location
+            dur = self._measure_pulse_duration(waveform, time_us, idx)
+            dur_min = expected_dur_us * 0.7   # ±30% tolerance
+            dur_max = expected_dur_us * 1.3
+            if not (dur_min <= dur <= dur_max):
+                continue
+
+            all_candidates.append((
+                float(time_us[idx]),
+                float(corr[idx]),
+                scale,
+                idx,
+            ))
+
+    if not all_candidates:
+        return []
+
+    # Deduplicate: if two scales detect the same event (within min_distance_us),
+    # keep the one with the higher correlation score
+    all_candidates.sort(key=lambda c: c[0])   # sort by time
+    merged = []
+    for cand in all_candidates:
+        if merged and (cand[0] - merged[-1][0]) < config.min_distance_us:
+            if cand[1] > merged[-1][1]:        # replace if better score
+                merged[-1] = cand
+        else:
+            merged.append(cand)
+
+    # Build BipolarEventRecord for each surviving candidate
+    records = []
+    for t_us, score, scale, idx in merged:
+        amp = self._extract_amplitude(waveform, time_us, idx, config.polarity)
+        dur = self._measure_pulse_duration(waveform, time_us, idx)
+        records.append(BipolarEventRecord(
+            event_index=len(records),
+            time_us=t_us,
+            amplitude_v=amp,
+            correlation_score=score,
+            period_us=dur,        # actual measured duration, not scaled target
+            polarity=self._detect_polarity(waveform, idx),
+            matched_scale=scale,  # NEW field — see below
+        ))
+
+    return records
+```
+
+### 3. Add `matched_scale` to `BipolarEventRecord`
+
+```python
+@dataclass
+class BipolarEventRecord:
+    event_index: int
+    time_us: float
+    amplitude_v: float
+    correlation_score: float
+    period_us: float          # actual measured pulse duration
+    polarity: str
+    matched_scale: float = 1.0   # NEW — which scale factor produced this hit
+```
+
+This lets the ratemeter page (or future analysis) know which particle velocity
+class each event belongs to.
+
+---
+
+## Changes to `pages/ratemeter_page.py`
+
+### UI controls to add (inside the Detection Mode group box, matched filter section)
+
+**Scale factors input** — a line edit accepting a comma-separated list:
+
+```
+Scale factors:  [ 0.75, 1.0, 1.5, 2.0 ]   (QLineEdit, validated on change)
+```
+
+- Default: `"1.0"` (preserves existing single-scale behavior)
+- Validation: parse as floats, reject non-positive values, cap list at 8
+  entries (8 correlation passes per acquisition window is practical maximum)
+- On change: update `MatchedFilterConfig.scale_factors`, persist to QSettings
+  under key `ratemeter/mf_scale_factors`
+- Show a small label next to the field showing the equivalent pulse durations:
+  e.g. `"→ 42, 85, 128, 170 µs"` — computed as
+  `pulse_duration_us * scale` for each entry
+
+### QSettings key
+
+```
+ratemeter/mf_scale_factors   →  JSON list of floats, e.g. [0.75, 1.0, 1.5, 2.0]
+```
+
+---
+
+## Performance note
+
+Each additional scale factor adds one full correlation pass per acquired
+waveform. At the ratemeter's typical acquisition rate this is negligible for
+≤8 scales, but the UI should show a warning label if `len(scale_factors) > 8`:
+
+```
+"⚠ More than 8 scales may cause acquisition lag"
+```
+
+---
+
+## Unit tests to add (`tests/test_matched_filter.py`)
+
+1. `test_scale_1_0_matches_baseline` — scale=1.0 gives same result as
+   unscaled template on a synthetic pulse of the nominal duration
+2. `test_scale_2_0_detects_stretched_pulse` — a pulse at 2× duration is
+   missed at scale=1.0, detected at scale=2.0
+3. `test_deduplication_keeps_best_score` — two scales detecting the same
+   event within `min_distance_us` → only the higher-score hit survives
+4. `test_matched_scale_recorded` — `BipolarEventRecord.matched_scale` reflects
+   which scale factor produced the hit
+5. `test_empty_scale_list_raises` — `scale_factors=[]` raises `ValueError`
+   before running detection
+
+---
+
+## Implementation order
+
+1. Rename `period_us` → `pulse_duration_us` throughout (low risk, do first)
+2. Add `matched_scale` to `BipolarEventRecord`
+3. Add `scale_factors` to `MatchedFilterConfig` with default `[1.0]`
+4. Implement `_scale_template()` in `MatchedFilter`
+5. Refactor `detect()` with scale loop + deduplication
+6. Add UI controls to `ratemeter_page.py`
+7. Add unit tests

@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -132,6 +133,9 @@ _MF_POLARITY_MAP = {
     "Negative first": "negative_first",
     "Both":           "both",
 }
+_MF_MAX_SCALES = 8
+# pages/ -> package root -> templates/template.npy
+_DEFAULT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "template.npy"
 _DETECTION_MODE_SIMPLE = "Simple threshold"
 _DETECTION_MODE_MATCHED_FILTER = "Matched filter (bipolar)"
 
@@ -410,28 +414,43 @@ class RatemeterPage(QWidget):
         mf_lay = QVBoxLayout(self._mf_controls)
         mf_lay.setContentsMargins(0, 0, 0, 0)
 
-        mf_lay.addWidget(QLabel("Template period (µs):"))
-        self.spin_mf_period = QDoubleSpinBox()
-        self.spin_mf_period.setRange(10.0, 500.0)
-        self.spin_mf_period.setValue(85.0)
-        self.spin_mf_period.valueChanged.connect(self._schedule_restart)
-        self.spin_mf_period.valueChanged.connect(self._update_mf_window_warning)
-        mf_lay.addWidget(self.spin_mf_period)
+        mf_lay.addWidget(QLabel("Pulse duration, peak-to-peak (µs):"))
+        self.spin_mf_pulse = QDoubleSpinBox()
+        self.spin_mf_pulse.setRange(10.0, 500.0)
+        self.spin_mf_pulse.setValue(85.0)
+        self.spin_mf_pulse.valueChanged.connect(self._schedule_restart)
+        self.spin_mf_pulse.valueChanged.connect(self._update_mf_window_warning)
+        self.spin_mf_pulse.valueChanged.connect(self._update_mf_scale_preview)
+        mf_lay.addWidget(self.spin_mf_pulse)
 
-        mf_lay.addWidget(QLabel("Period min (µs):"))
-        self.spin_mf_period_min = QDoubleSpinBox()
-        self.spin_mf_period_min.setRange(10.0, 500.0)
-        self.spin_mf_period_min.setValue(78.0)
-        self.spin_mf_period_min.valueChanged.connect(self._schedule_restart)
-        mf_lay.addWidget(self.spin_mf_period_min)
+        mf_lay.addWidget(QLabel("Pulse min (µs):"))
+        self.spin_mf_pulse_min = QDoubleSpinBox()
+        self.spin_mf_pulse_min.setRange(10.0, 500.0)
+        self.spin_mf_pulse_min.setValue(60.0)
+        self.spin_mf_pulse_min.valueChanged.connect(self._schedule_restart)
+        mf_lay.addWidget(self.spin_mf_pulse_min)
 
-        mf_lay.addWidget(QLabel("Period max (µs):"))
-        self.spin_mf_period_max = QDoubleSpinBox()
-        self.spin_mf_period_max.setRange(10.0, 500.0)
-        self.spin_mf_period_max.setValue(92.0)
-        self.spin_mf_period_max.valueChanged.connect(self._schedule_restart)
-        self.spin_mf_period_max.valueChanged.connect(self._update_mf_window_warning)
-        mf_lay.addWidget(self.spin_mf_period_max)
+        mf_lay.addWidget(QLabel("Pulse max (µs):"))
+        self.spin_mf_pulse_max = QDoubleSpinBox()
+        self.spin_mf_pulse_max.setRange(10.0, 500.0)
+        self.spin_mf_pulse_max.setValue(110.0)
+        self.spin_mf_pulse_max.valueChanged.connect(self._schedule_restart)
+        self.spin_mf_pulse_max.valueChanged.connect(self._update_mf_window_warning)
+        mf_lay.addWidget(self.spin_mf_pulse_max)
+
+        mf_lay.addWidget(QLabel("Scale factors (comma-separated):"))
+        self.edit_mf_scales = QLineEdit("1.0")
+        self.edit_mf_scales.setToolTip(
+            "Template stretch factors tried on every trace, e.g. 0.75, 1.0, 1.5, 2.0.\n"
+            "Pulse min/max are multiplied by each scale. Up to 8 values."
+        )
+        self.edit_mf_scales.textChanged.connect(self._on_mf_scales_changed)
+        mf_lay.addWidget(self.edit_mf_scales)
+
+        self.lbl_mf_scale_preview = QLabel("")
+        self.lbl_mf_scale_preview.setWordWrap(True)
+        self.lbl_mf_scale_preview.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        mf_lay.addWidget(self.lbl_mf_scale_preview)
 
         mf_lay.addWidget(QLabel("Polarity:"))
         self.combo_mf_polarity = QComboBox()
@@ -455,10 +474,11 @@ class RatemeterPage(QWidget):
         self.spin_mf_min_spacing.valueChanged.connect(self._schedule_restart)
         mf_lay.addWidget(self.spin_mf_min_spacing)
 
-        # Empirical template (Step 6 stub) — infrastructure only, inert for now.
         self.chk_mf_use_empirical = QCheckBox("Use empirical template (.npy)")
-        self.chk_mf_use_empirical.setEnabled(False)
-        self.chk_mf_use_empirical.setChecked(False)
+        self.chk_mf_use_empirical.setToolTip(
+            "The template's own peak-to-peak is taken to equal the pulse duration above,\n"
+            "so it is resampled to the scope's sample interval automatically."
+        )
         self.chk_mf_use_empirical.stateChanged.connect(self._on_mf_use_empirical_changed)
         mf_lay.addWidget(self.chk_mf_use_empirical)
 
@@ -472,6 +492,7 @@ class RatemeterPage(QWidget):
         self.lbl_mf_template_path.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
         mf_lay.addWidget(self.lbl_mf_template_path)
         self._mf_empirical_template_path = ""
+        self._set_mf_template_path(str(_DEFAULT_TEMPLATE_PATH) if _DEFAULT_TEMPLATE_PATH.exists() else "")
 
         self.lbl_mf_window_warning = QLabel("")
         self.lbl_mf_window_warning.setWordWrap(True)
@@ -1192,23 +1213,57 @@ class RatemeterPage(QWidget):
 
     def _on_mf_use_empirical_changed(self, _state=None) -> None:
         self.btn_mf_load_template.setEnabled(self.chk_mf_use_empirical.isChecked())
+        self._schedule_restart()
+
+    def _set_mf_template_path(self, path: str) -> None:
+        self._mf_empirical_template_path = path
+        self.lbl_mf_template_path.setText(path or "(none)")
 
     def _on_mf_load_template_clicked(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load Empirical Template", "", "NumPy array (*.npy)")
+        start_dir = str(_DEFAULT_TEMPLATE_PATH.parent) if _DEFAULT_TEMPLATE_PATH.parent.exists() else ""
+        path, _ = QFileDialog.getOpenFileName(self, "Load Empirical Template", start_dir, "NumPy array (*.npy)")
         if path:
-            self._mf_empirical_template_path = path
-            self.lbl_mf_template_path.setText(path)
+            self._set_mf_template_path(path)
             self._schedule_restart()
+
+    def _parse_mf_scales(self) -> Optional[List[float]]:
+        """Parse the scale-factor field. Returns None if it is invalid."""
+        parts = [p.strip() for p in self.edit_mf_scales.text().split(",") if p.strip()]
+        try:
+            scales = [float(p) for p in parts]
+        except ValueError:
+            return None
+        if not scales or any(s <= 0 for s in scales):
+            return None
+        return scales
+
+    def _on_mf_scales_changed(self, _text=None) -> None:
+        self._update_mf_scale_preview()
+        self._update_mf_window_warning()
+        if self._parse_mf_scales() is not None:
+            self._schedule_restart()
+
+    def _update_mf_scale_preview(self, *_args) -> None:
+        scales = self._parse_mf_scales()
+        if scales is None:
+            self.lbl_mf_scale_preview.setText("⚠ Enter positive numbers separated by commas.")
+            return
+        durations = ", ".join(f"{self.spin_mf_pulse.value() * s:.0f}" for s in scales)
+        text = f"→ {durations} µs"
+        if len(scales) > _MF_MAX_SCALES:
+            text += f"\n⚠ More than {_MF_MAX_SCALES} scales may cause acquisition lag"
+        self.lbl_mf_scale_preview.setText(text)
 
     def _update_mf_window_warning(self, *_args) -> None:
         if self.combo_detection_mode.currentText() != _DETECTION_MODE_MATCHED_FILTER:
             self.lbl_mf_window_warning.setText("")
             return
-        min_window_ms = self.spin_mf_period_max.value() * 3 / 1000.0
+        largest_scale = max(self._parse_mf_scales() or [1.0])
+        min_window_ms = self.spin_mf_pulse_max.value() * largest_scale * 3 / 1000.0
         if self.spin_window.value() < min_window_ms:
             self.lbl_mf_window_warning.setText(
                 f"⚠ Window duration ({self.spin_window.value():.2f} ms) is shorter than "
-                f"3× period max ({min_window_ms:.2f} ms). Correlation may be unreliable at trace edges."
+                f"3× largest pulse max ({min_window_ms:.2f} ms). Correlation may be unreliable at trace edges."
             )
         else:
             self.lbl_mf_window_warning.setText("")
@@ -1342,14 +1397,15 @@ class RatemeterPage(QWidget):
         enabled = self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER
         return MatchedFilterConfig(
             enabled=enabled,
-            period_us=self.spin_mf_period.value(),
-            period_min_us=self.spin_mf_period_min.value(),
-            period_max_us=self.spin_mf_period_max.value(),
+            pulse_duration_us=self.spin_mf_pulse.value(),
+            pulse_min_us=self.spin_mf_pulse_min.value(),
+            pulse_max_us=self.spin_mf_pulse_max.value(),
             polarity=_MF_POLARITY_MAP[self.combo_mf_polarity.currentText()],
             correlation_threshold=self.spin_mf_threshold.value(),
             min_distance_us=self.spin_mf_min_spacing.value(),
-            use_empirical_template=False,
-            empirical_template_path="",
+            use_empirical_template=self.chk_mf_use_empirical.isChecked(),
+            empirical_template_path=self._mf_empirical_template_path,
+            scale_factors=self._parse_mf_scales() or [1.0],
         )
 
     def _trigger_direction_value(self) -> str:
@@ -1426,9 +1482,21 @@ class RatemeterPage(QWidget):
         self.combo_detection_mode.setCurrentText(
             s.value("ratemeter/detection_mode", _DETECTION_MODE_SIMPLE, type=str)
         )
-        self.spin_mf_period.setValue(s.value("ratemeter/mf_period_us", 85.0, type=float))
-        self.spin_mf_period_min.setValue(s.value("ratemeter/mf_period_min_us", 78.0, type=float))
-        self.spin_mf_period_max.setValue(s.value("ratemeter/mf_period_max_us", 92.0, type=float))
+        self.spin_mf_pulse.setValue(s.value("ratemeter/mf_pulse_us", 85.0, type=float))
+        self.spin_mf_pulse_min.setValue(s.value("ratemeter/mf_pulse_min_us", 60.0, type=float))
+        self.spin_mf_pulse_max.setValue(s.value("ratemeter/mf_pulse_max_us", 110.0, type=float))
+        try:
+            saved_scales = json.loads(s.value("ratemeter/mf_scale_factors", "[1.0]", type=str))
+            self.edit_mf_scales.setText(", ".join(f"{float(v):g}" for v in saved_scales))
+        except (ValueError, TypeError):
+            self.edit_mf_scales.setText("1.0")
+        saved_template = s.value("ratemeter/mf_template_path", "", type=str)
+        if saved_template:
+            self._set_mf_template_path(saved_template)
+        self.chk_mf_use_empirical.setChecked(
+            s.value("ratemeter/mf_use_empirical", bool(self._mf_empirical_template_path), type=bool)
+        )
+        self._update_mf_scale_preview()
         self.combo_mf_polarity.setCurrentText(
             s.value("ratemeter/mf_polarity", "Positive first", type=str)
         )
@@ -1494,9 +1562,12 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/captures_per_batch", self.spin_captures_per_batch.value())
 
         s.setValue("ratemeter/detection_mode", self.combo_detection_mode.currentText())
-        s.setValue("ratemeter/mf_period_us", self.spin_mf_period.value())
-        s.setValue("ratemeter/mf_period_min_us", self.spin_mf_period_min.value())
-        s.setValue("ratemeter/mf_period_max_us", self.spin_mf_period_max.value())
+        s.setValue("ratemeter/mf_pulse_us", self.spin_mf_pulse.value())
+        s.setValue("ratemeter/mf_pulse_min_us", self.spin_mf_pulse_min.value())
+        s.setValue("ratemeter/mf_pulse_max_us", self.spin_mf_pulse_max.value())
+        s.setValue("ratemeter/mf_scale_factors", json.dumps(self._parse_mf_scales() or [1.0]))
+        s.setValue("ratemeter/mf_template_path", self._mf_empirical_template_path)
+        s.setValue("ratemeter/mf_use_empirical", self.chk_mf_use_empirical.isChecked())
         s.setValue("ratemeter/mf_polarity", self.combo_mf_polarity.currentText())
         s.setValue("ratemeter/mf_corr_threshold", self.spin_mf_threshold.value())
         s.setValue("ratemeter/mf_min_spacing_us", self.spin_mf_min_spacing.value())

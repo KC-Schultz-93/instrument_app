@@ -29,6 +29,7 @@ services/     Hardware drivers, data processing, reusable logic
 theme/        Theme manager, palettes, shared style tokens
 ui/           Reusable themed widgets (buttons, cards, plots)
 tests/        Validation scripts and bench tests
+templates/    Empirical matched-filter templates (.npy); template.npy is the default
 INT_SYS/      Arduino firmware for the interlock/pump/gauge controller
 Recorded Data/
   Pressures/  Existing pressure logs
