@@ -16,8 +16,14 @@ from .composites import (
 )
 from .plots import TimePressureView
 from .collapsible_box import CollapsibleBox
+from .toggle_switch import ToggleSwitch
+from .param_tile import ParamTile
+from .dock_panel import DockHost
 
 __all__ = [
+    "ToggleSwitch",
+    "ParamTile",
+    "DockHost",
     "ThemedButton",
     "PillLabel",
     "ValueDisplay",
