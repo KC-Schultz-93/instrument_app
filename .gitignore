@@ -67,7 +67,7 @@ desktop.ini
 crash_log.txt
 
 # DAQ/pressure data output
-Recorded Data/
+Recorded Data/Pressures
 
 # Project-specific
 read_me.toml
