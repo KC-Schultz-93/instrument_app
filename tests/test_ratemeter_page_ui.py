@@ -41,6 +41,12 @@ EXPECTED_KEYS = {
     "ratemeter/mf_template_path", "ratemeter/mf_use_empirical", "ratemeter/mf_polarity",
     "ratemeter/mf_corr_threshold", "ratemeter/mf_min_spacing_us", "ratemeter/bands",
     "ratemeter/timed_recording_duration_s",
+    # catch capture mode
+    "ratemeter/catch_mode", "ratemeter/catch_mirror_voltages", "ratemeter/catch_b_probe",
+    "ratemeter/catch_b_range_v", "ratemeter/catch_b_coupling", "ratemeter/catch_b_bw",
+    "ratemeter/catch_start_ms", "ratemeter/catch_end_ms", "ratemeter/catch_min_cycles",
+    "ratemeter/catch_min_period_us", "ratemeter/catch_a_coherence",
+    "ratemeter/catch_b_coherence", "ratemeter/catch_fold_snr", "ratemeter/catch_b_shape",
 }
 
 

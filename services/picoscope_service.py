@@ -19,11 +19,15 @@ from __future__ import annotations
 import ctypes
 import time
 from datetime import datetime
-from typing import List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
-from instrument_app.services.daq_models import AcquisitionConfig, WaveformRecord
+from instrument_app.services.daq_models import (
+    AcquisitionConfig,
+    DualWaveformRecord,
+    WaveformRecord,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +467,148 @@ class PicoScopeService:
             ))
 
         return records
+
+    # ------------------------------------------------------------------
+    # Two-channel acquisition (catch capture: A and B recorded together)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_dual(config_a: AcquisitionConfig, config_b: AcquisitionConfig) -> None:
+        if config_a.channel.upper() != "A" or config_b.channel.upper() != "B":
+            raise ValueError("Two-channel capture needs config_a on channel A and config_b on channel B.")
+        if (config_a.sample_interval_ns != config_b.sample_interval_ns
+                or config_a.num_samples != config_b.num_samples
+                or config_a.pre_trigger_samples != config_b.pre_trigger_samples):
+            raise ValueError("Channels A and B must share sample interval, length and pre-trigger samples.")
+
+    def configure_channels_dual(
+        self, config_a: AcquisitionConfig, config_b: AcquisitionConfig
+    ) -> None:
+        """Enable both channels, each with its own coupling, range and bandwidth limit."""
+        ps = self._get_ps()
+        self._validate_dual(config_a, config_b)
+
+        for cfg in (config_a, config_b):
+            channel_enum = _CHANNEL_MAP[cfg.channel.upper()]
+            status = ps.ps4000SetChannel(
+                self._handle,
+                channel_enum,
+                1,
+                _COUPLING_MAP.get(cfg.coupling.upper(), 1),
+                self._nearest_range_enum(cfg.voltage_range_v),
+            )
+            self._check_status(status, f"ps4000SetChannel(ch={channel_enum})")
+            status = ps.ps4000SetBwFilter(
+                self._handle, channel_enum, 1 if cfg.bandwidth_limit_enabled else 0
+            )
+            self._check_status(status, f"ps4000SetBwFilter(ch={channel_enum})")
+
+    def run_block_dual(
+        self,
+        config_a: AcquisitionConfig,
+        config_b: AcquisitionConfig,
+        abort_check: Optional[Callable[[], bool]] = None,
+    ) -> Optional[DualWaveformRecord]:
+        """
+        Run one block acquisition on channels A and B together. BLOCKING — call
+        from a worker thread. The trigger is whatever set_trigger() last configured
+        (source channel A for catch capture).
+
+        If abort_check is given it is polled while waiting for the trigger; when it
+        returns True the acquisition is cancelled and None is returned, so a worker
+        can be stopped promptly even with the auto-trigger timer off (waiting
+        indefinitely for a real trigger). Without abort_check the wait is capped
+        like run_block.
+        """
+        ps = self._get_ps()
+        timestamp = datetime.now()
+        self._validate_dual(config_a, config_b)
+
+        n_samples = config_a.num_samples
+        post_samples = n_samples - config_a.pre_trigger_samples
+        timebase_index, actual_interval_ns = self.get_timebase(config_a)
+
+        ps.ps4000Stop(self._handle)
+
+        time_indisposed = ctypes.c_int32(0)
+        status = ps.ps4000RunBlock(
+            self._handle,
+            config_a.pre_trigger_samples,
+            post_samples,
+            timebase_index,
+            1,                              # oversample = 1
+            ctypes.byref(time_indisposed),
+            0,                              # segmentIndex
+            None,                           # lpReady callback (use polling)
+            None,                           # pParameter
+        )
+        self._check_status(status, "ps4000RunBlock")
+
+        ready = ctypes.c_int16(0)
+        polls = 0
+        while True:
+            if abort_check is not None and abort_check():
+                ps.ps4000Stop(self._handle)
+                return None
+            status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
+            self._check_status(status, "ps4000IsReady")
+            if ready.value:
+                break
+            polls += 1
+            if abort_check is None and polls >= 100_000:
+                raise RuntimeError("PicoScope: run_block_dual timed out waiting for ready.")
+            time.sleep(0.001)
+
+        # One int16 buffer pair per channel (SetDataBuffers, as in run_block). All
+        # buffers must stay alive until GetValues returns.
+        buffers = {}
+        for cfg in (config_a, config_b):
+            channel_enum = _CHANNEL_MAP[cfg.channel.upper()]
+            buf = (ctypes.c_int16 * n_samples)()
+            buf_min = (ctypes.c_int16 * n_samples)()    # unused placeholder
+            status = ps.ps4000SetDataBuffers(
+                self._handle, channel_enum, ctypes.byref(buf), ctypes.byref(buf_min), n_samples
+            )
+            self._check_status(status, f"ps4000SetDataBuffers(ch={channel_enum})")
+            buffers[cfg.channel.upper()] = (buf, buf_min)
+
+        overflow = ctypes.c_int16(0)
+        n_values = ctypes.c_int32(n_samples)
+        status = ps.ps4000GetValues(
+            self._handle,
+            0,                              # startIndex
+            ctypes.byref(n_values),
+            1,                              # downSampleRatio
+            0,                              # downSampleRatioMode = NONE
+            0,                              # segmentIndex
+            ctypes.byref(overflow),
+        )
+        self._check_status(status, "ps4000GetValues")
+
+        n = n_values.value
+        voltages = {}
+        for cfg in (config_a, config_b):
+            raw = np.frombuffer(buffers[cfg.channel.upper()][0], dtype=np.int16, count=n).astype(np.float64)
+            v = raw / _ADC_MAX * cfg.voltage_range_v * cfg.probe_factor
+            voltages[cfg.channel.upper()] = -v if cfg.invert_polarity else v
+
+        return DualWaveformRecord(
+            trace_id=0,                     # caller sets this
+            timestamp=timestamp,
+            voltage_a=voltages["A"],
+            voltage_b=voltages["B"],
+            time_ns=np.arange(n, dtype=np.float64) * actual_interval_ns,
+            sample_interval_ns=actual_interval_ns,
+            config_a=config_a,
+            config_b=config_b,
+            metadata={
+                "actual_interval_ns": actual_interval_ns,
+                "timebase_index": timebase_index,
+                "overflow_a": bool(overflow.value & 1),    # bit 0 = channel A
+                "overflow_b": bool(overflow.value & 2),    # bit 1 = channel B
+                "n_values": n,
+            },
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

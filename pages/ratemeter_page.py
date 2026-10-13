@@ -11,17 +11,24 @@ Layout
 ------
 PicoScope-style tiles + one docked option panel (see docs/ratemeter_ui.md):
   Top-left    status block: Connect/Run switches + lbl_status, lbl_trace_count
-  Top bar     Scope / Trigger / Captures tiles
+  Top bar     Scope / Trigger / Captures / Catch tiles
   Left rail   Channel / Detection / Rates tiles, Data Recorder pinned below
   Dock        ~320 px, one panel at a time, opened by clicking a tile
   Plots       waveform + rate trend (vertical splitter)
-  Bottom      editable band table (left), live band readouts (right)
+  Bottom      editable band table (left), live band readouts (right);
+              catch dashboard (mirror voltages, counts) instead in catch mode
 
 Threading model
 ----------------
 Acquisition runs in RatemeterWorker (QThread). Acquisition controls auto-apply
 by restarting the worker (debounced 300 ms for spin/combo edits, immediate for
 band table edits) while a run is active.
+
+Catch capture mode (optional, Catch tile; see docs/catch_capture.md): instead of
+RatemeterWorker, a CatchPipeline records channels A and B on every trigger,
+classifies the trace on a separate analysis thread (services/catch_classifier)
+and saves only waveforms that show a caught particle (services/catch_recorder).
+With the mode off, behaviour is unchanged.
 
 Only one page may hold the PicoScope handle at a time — RatemeterPage owns its
 own PicoScopeService instance and coordinates with DAQPage via the shared
@@ -32,6 +39,7 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
+from dataclasses import replace
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -59,14 +67,19 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from instrument_app.services.catch_classifier import CatchClassifierConfig
+from instrument_app.services.catch_recorder import CatchRecorder
+from instrument_app.services.catch_worker import CatchCounters, CatchPipeline, TriggerInfo
 from instrument_app.services.daq_channels import DAQChannels
 from instrument_app.services.daq_models import (
+    AcquisitionConfig,
     AmplitudeBand,
     MatchedFilterConfig,
     PeakRecord,
@@ -125,6 +138,8 @@ _PLOT_MIN_INTERVAL_S = 0.1  # 10 Hz waveform refresh cap
 _RESTART_DEBOUNCE_MS = 300
 
 _WIDTH_REL_HEIGHT_MAP = {0: 0.5, 1: 0.2, 2: 0.1}
+
+_CATCH_HOLD_S = 3.0   # keep a caught waveform on screen this long before non-catches redraw
 
 _MF_POLARITY_MAP = {
     "Positive first": "positive_first",
@@ -228,6 +243,13 @@ class RatemeterPage(QWidget):
         self._timed_recording_started_at: Optional[datetime] = None
         self._timed_peak_buffer: List[PeakRecord] = []
 
+        # Catch capture mode. Counters and the recorder (one folder per Run)
+        # outlive pipeline restarts caused by setting changes mid-run.
+        self._catch_counters = CatchCounters()
+        self._catch_recorder: Optional[CatchRecorder] = None
+        self._catch_hold_until: float = 0.0
+        self._catch_last_saved: str = ""
+
         self._settings = QSettings(_APP_ORG, _APP_NAME)
         # True while _load_settings() runs: widget setters fire signals that
         # call _save_settings(), which would overwrite not-yet-loaded keys
@@ -264,6 +286,7 @@ class RatemeterPage(QWidget):
             ("captures", "Captures", self._make_captures_panel()),
             ("detection", "Detection", self._make_detection_mode_group()),
             ("rates", "Rates", self._make_rates_panel()),
+            ("catch", "Catch", self._make_catch_panel()),
         ]
         for key, title, panel in panels:
             panel.layout().addStretch()
@@ -276,6 +299,7 @@ class RatemeterPage(QWidget):
             "captures": ParamTile("Captures", stepper=True),
             "detection": ParamTile("Detection"),
             "rates": ParamTile("Rates"),
+            "catch": ParamTile("Catch"),
         }
         for key, tile in self._tiles.items():
             tile.clicked.connect(lambda k=key: self.dock.toggle(k))
@@ -368,7 +392,7 @@ class RatemeterPage(QWidget):
         lay = QHBoxLayout(bar)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        for key in ("scope", "trigger", "captures"):
+        for key in ("scope", "trigger", "captures", "catch"):
             lay.addWidget(self._tiles[key])
         lay.addStretch(1)
         return bar
@@ -627,7 +651,11 @@ class RatemeterPage(QWidget):
         self.spin_trend_window.valueChanged.connect(self._save_settings)
         lay.addWidget(self.spin_trend_window)
 
-        lay.addWidget(QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]"))
+        # Word-wrapped: an unwrapped label here forced the dock's minimum width to
+        # 356 px, clipping every dock panel's right edge (the dock sizes to its widest page).
+        electrode = QLabel("Electrode length:  1.3 in  (33.0 mm)  [fixed]")
+        electrode.setWordWrap(True)
+        lay.addWidget(electrode)
 
         lay.addWidget(QLabel("Measure width at:"))
         self.combo_width_rel_height = QComboBox()
@@ -682,6 +710,455 @@ class RatemeterPage(QWidget):
         lay.addLayout(btn_row)
 
         return box
+
+    # ------------------------------------------------------------------
+    # Catch capture mode: trigger -> classify -> keep only caught particles
+    # ------------------------------------------------------------------
+
+    def _make_catch_panel(self) -> QWidget:
+        """Dock panel: channel B setup and classifier thresholds."""
+        box, lay = self._make_panel()
+
+        self.chk_catch_mode = QCheckBox("Catch capture mode")
+        self.chk_catch_mode.setToolTip(
+            "Run the trigger -> analyse -> keep-or-discard pipeline instead of the ratemeter.\n"
+            "Needs the trigger enabled and a window long enough to include the particle signal.\n"
+            "Stop the run to change mode."
+        )
+        lay.addWidget(self.chk_catch_mode)
+
+        note = QLabel(
+            "Records channels A and B on every trigger and keeps only waveforms "
+            "with a caught particle: repeating bipolar lobes on A and a repeating "
+            "square wave on B. Everything else is discarded and counted.\n"
+            "A is the trigger / lobe channel (set up in the Channel panel). "
+            "Captures per batch is not used in this mode."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size: 8pt;")
+        lay.addWidget(note)
+
+        lay.addWidget(self._wrapped_label("Channel B probe:"))
+        self.combo_catch_b_probe = QComboBox()
+        self.combo_catch_b_probe.addItems(list(PROBE_FACTORS.keys()))
+        self.combo_catch_b_probe.setCurrentText("x1")
+        lay.addWidget(self.combo_catch_b_probe)
+
+        lay.addWidget(self._wrapped_label("Channel B voltage range:"))
+        self.combo_catch_b_range = QComboBox()
+        self._populate_catch_b_range_combo()
+        self.combo_catch_b_range.setCurrentText("±20 mV")
+        lay.addWidget(self.combo_catch_b_range)
+
+        lay.addWidget(self._wrapped_label("Channel B coupling:"))
+        self.combo_catch_b_coupling = QComboBox()
+        self.combo_catch_b_coupling.addItems(["DC", "AC"])
+        lay.addWidget(self.combo_catch_b_coupling)
+
+        self.chk_catch_b_bw = QCheckBox("B: 200 kHz bandwidth limit")
+        lay.addWidget(self.chk_catch_b_bw)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        lay.addWidget(sep)
+
+        def _dspin(lo, hi, value, decimals, step, tip):
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setDecimals(decimals)
+            spin.setSingleStep(step)
+            spin.setValue(value)
+            spin.setToolTip(tip)
+            return spin
+
+        lay.addWidget(self._wrapped_label("Analysis starts at (ms from trace start):"))
+        self.spin_catch_start_ms = _dspin(
+            0.0, 1000.0, 3.5, 2, 0.1,
+            "Skip the trigger and mirror-switching transients (and the settling tail "
+            "after them). The first capture had the mirror switch at ~2.2 ms, settled by ~3.3 ms.",
+        )
+        lay.addWidget(self.spin_catch_start_ms)
+
+        lay.addWidget(self._wrapped_label("Analysis ends at (ms, 0 = end of trace):"))
+        self.spin_catch_end_ms = _dspin(0.0, 1000.0, 0.0, 2, 0.5, "0 analyses to the end of the trace.")
+        lay.addWidget(self.spin_catch_end_ms)
+
+        lay.addWidget(self._wrapped_label("Minimum repeats in window:"))
+        self.spin_catch_min_cycles = _dspin(
+            2.0, 100.0, 5.0, 1, 0.5,
+            "The pattern must repeat at least this many times. This is the only upper "
+            "limit on the period (slowest particle); there is no fixed frequency range.",
+        )
+        lay.addWidget(self.spin_catch_min_cycles)
+
+        lay.addWidget(self._wrapped_label("Shortest period considered (µs):"))
+        self.spin_catch_min_period_us = _dspin(
+            2.0, 1000.0, 20.0, 1, 5.0, "Faster than this is treated as noise, not oscillation."
+        )
+        lay.addWidget(self.spin_catch_min_period_us)
+
+        lay.addWidget(self._wrapped_label("A repetition strength (0–1):"))
+        self.spin_catch_a_coherence = _dspin(
+            0.0, 1.0, 0.40, 2, 0.05, "Autocorrelation peak of channel A. The first capture measured ~0.78."
+        )
+        lay.addWidget(self.spin_catch_a_coherence)
+
+        lay.addWidget(self._wrapped_label("B repetition strength (0–1):"))
+        self.spin_catch_b_coherence = _dspin(
+            0.0, 1.0, 0.30, 2, 0.05, "Autocorrelation of channel B at A's period. The first capture measured ~0.49."
+        )
+        lay.addWidget(self.spin_catch_b_coherence)
+
+        lay.addWidget(self._wrapped_label("Repeating signal vs noise (min):"))
+        self.spin_catch_fold_snr = _dspin(
+            0.0, 50.0, 1.0, 1, 0.1,
+            "rms of the folded (cycle-averaged) waveform / cycle-to-cycle residual rms. "
+            "Pure noise measures ~0.2; the first capture ~1.3 (B) and ~1.8 (A).",
+        )
+        lay.addWidget(self.spin_catch_fold_snr)
+
+        lay.addWidget(self._wrapped_label("B square-wave check (0 = off):"))
+        self.spin_catch_b_shape = _dspin(
+            0.0, 2.0, 0.10, 2, 0.05,
+            "Harmonic content of B's repeating waveform. The first capture measured 0.71; "
+            "a pure sine measures ~0. Rejects sinusoidal pickup on both channels.",
+        )
+        lay.addWidget(self.spin_catch_b_shape)
+
+        self.lbl_catch_window_info = self._wrapped_label("")
+        lay.addWidget(self.lbl_catch_window_info)
+
+        # Connect only now so setting the initial values above fires nothing.
+        self.chk_catch_mode.toggled.connect(self._on_catch_mode_toggled)
+        self.combo_catch_b_probe.currentIndexChanged.connect(self._on_catch_b_probe_changed)
+        self.combo_catch_b_range.currentIndexChanged.connect(self._schedule_restart)
+        self.combo_catch_b_coupling.currentIndexChanged.connect(self._schedule_restart)
+        self.chk_catch_b_bw.stateChanged.connect(self._schedule_restart)
+        for spin in (
+            self.spin_catch_start_ms, self.spin_catch_end_ms, self.spin_catch_min_cycles,
+            self.spin_catch_min_period_us, self.spin_catch_a_coherence,
+            self.spin_catch_b_coherence, self.spin_catch_fold_snr, self.spin_catch_b_shape,
+        ):
+            spin.valueChanged.connect(self._on_catch_classifier_changed)
+        self.spin_window.valueChanged.connect(self._update_catch_window_info)
+        self._update_catch_window_info()
+        return box
+
+    @staticmethod
+    def _wrapped_label(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        return lbl
+
+    def _make_catch_dashboard(self) -> QWidget:
+        """Bottom-strip page shown instead of the band table in catch mode:
+        mirror-voltage text, live counts, last result."""
+        card = CardFrame()
+        outer = QHBoxLayout(card)
+        outer.setContentsMargins(10, 8, 10, 8)
+        outer.setSpacing(16)
+
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        left.addWidget(self._wrapped_label("Mirror voltages (saved with each waveform):"))
+        self.edit_mirror_voltages = QLineEdit()
+        self.edit_mirror_voltages.setPlaceholderText("e.g. front +350 V, back +420 V")
+        self.edit_mirror_voltages.setToolTip(
+            "Free text, written into every saved waveform's .json and the session index.\n"
+            "It can be edited while running; each file gets the text current when it is saved."
+        )
+        self.edit_mirror_voltages.setMinimumWidth(230)
+        left.addWidget(self.edit_mirror_voltages)
+        left.addStretch(1)
+        self.btn_catch_reset = QPushButton("Reset counts")
+        self.btn_catch_reset.setToolTip("Zero the trigger / catch / non-catch counts (does not touch saved files).")
+        left.addWidget(self.btn_catch_reset)
+        outer.addLayout(left, 2)
+
+        right = QVBoxLayout()
+        right.setSpacing(4)
+        stats = QHBoxLayout()
+        stats.setSpacing(18)
+        self._catch_stat_labels = {}
+        for key, caption in (
+            ("triggers", "Triggers"), ("catches", "Catches"),
+            ("non_catches", "Non-catches"), ("rate", "Catch rate"),
+        ):
+            col = QVBoxLayout()
+            col.setSpacing(0)
+            cap = QLabel(caption)
+            cap.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 8pt;")
+            val = QLabel("0")
+            val.setStyleSheet("font: bold 18pt 'Segoe UI';")
+            col.addWidget(cap)
+            col.addWidget(val)
+            stats.addLayout(col)
+            self._catch_stat_labels[key] = val
+        self._catch_stat_labels["rate"].setText("–")
+        stats.addStretch(1)
+        right.addLayout(stats)
+
+        self.lbl_catch_warn = self._wrapped_label("")
+        self.lbl_catch_warn.setStyleSheet(f"color: {style.BAD}; font-size: 9pt;")
+        right.addWidget(self.lbl_catch_warn)
+        self.lbl_catch_last = self._wrapped_label("Waiting for the first trigger…")
+        self.lbl_catch_last.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        right.addWidget(self.lbl_catch_last)
+        right.addStretch(1)
+        outer.addLayout(right, 5)
+
+        self.edit_mirror_voltages.textChanged.connect(self._on_mirror_voltages_changed)
+        self.btn_catch_reset.clicked.connect(self._on_catch_reset_clicked)
+        return card
+
+    # -- configuration ---------------------------------------------------
+
+    def _catch_mode_on(self) -> bool:
+        chk = getattr(self, "chk_catch_mode", None)
+        return bool(chk is not None and chk.isChecked())
+
+    def _populate_catch_b_range_combo(self) -> None:
+        """Same idea as _populate_range_combo, for channel B's own probe."""
+        preserve_native = (
+            self.combo_catch_b_range.currentData() if self.combo_catch_b_range.count() else None
+        )
+        factor = PROBE_FACTORS.get(self.combo_catch_b_probe.currentText(), 1.0)
+        self.combo_catch_b_range.blockSignals(True)
+        self.combo_catch_b_range.clear()
+        for native_v in NATIVE_VOLTAGE_RANGES_V:
+            self.combo_catch_b_range.addItem(format_voltage_label(native_v * factor), native_v)
+        if preserve_native is not None:
+            idx = self.combo_catch_b_range.findData(preserve_native)
+            self.combo_catch_b_range.setCurrentIndex(idx if idx >= 0 else 0)
+        self.combo_catch_b_range.blockSignals(False)
+
+    def _on_catch_b_probe_changed(self, *_args) -> None:
+        self._populate_catch_b_range_combo()
+        self._schedule_restart()
+
+    def _build_catch_acq_configs(self):
+        """(config_a, config_b): A from the Channel/Scope/Trigger panels (forced to
+        channel A), B from the Catch panel, sharing A's timebase and length."""
+        base = replace(self._build_config(), channel="A")
+        config_a = base.to_acquisition_config(
+            trigger_enabled=self.chk_trigger_enable.isChecked(),
+            trigger_threshold_v=self.spin_trigger_threshold.value() / 1000.0,
+            trigger_direction=self._trigger_direction_value(),
+        )
+        b_native = self.combo_catch_b_range.currentData()
+        config_b = AcquisitionConfig(
+            channel="B",
+            voltage_range_v=b_native if b_native is not None else 0.02,
+            coupling=self.combo_catch_b_coupling.currentText(),
+            sample_interval_ns=config_a.sample_interval_ns,
+            num_samples=config_a.num_samples,
+            pre_trigger_samples=config_a.pre_trigger_samples,
+            bandwidth_limit_enabled=self.chk_catch_b_bw.isChecked(),
+            probe_factor=PROBE_FACTORS.get(self.combo_catch_b_probe.currentText(), 1.0),
+        )
+        return config_a, config_b
+
+    def _build_catch_classifier_config(self) -> CatchClassifierConfig:
+        end_ms = self.spin_catch_end_ms.value()
+        return CatchClassifierConfig(
+            analysis_start_ms=self.spin_catch_start_ms.value(),
+            analysis_end_ms=end_ms if end_ms > 0 else None,
+            min_cycles=self.spin_catch_min_cycles.value(),
+            min_period_us=self.spin_catch_min_period_us.value(),
+            a_coherence_min=self.spin_catch_a_coherence.value(),
+            b_coherence_min=self.spin_catch_b_coherence.value(),
+            fold_snr_min=self.spin_catch_fold_snr.value(),
+            b_shape_ratio_min=self.spin_catch_b_shape.value(),
+        )
+
+    def _update_catch_window_info(self, *_args) -> None:
+        """Tell the user what part of the trace is analysed and which periods that can resolve."""
+        window_ms = self.spin_window.value()
+        start_ms = self.spin_catch_start_ms.value()
+        end_ms = self.spin_catch_end_ms.value() or window_ms
+        end_ms = min(end_ms, window_ms)
+        avail_ms = end_ms - start_ms
+        min_cycles = self.spin_catch_min_cycles.value()
+        min_period_us = self.spin_catch_min_period_us.value()
+        if avail_ms <= 0:
+            text, bad = "⚠ The analysis window is empty: it starts after the trace ends. Lengthen the Scope window or lower the start.", True
+        else:
+            longest_us = avail_ms * 1000.0 / min_cycles
+            text = (
+                f"Analysing {start_ms:g}–{end_ms:g} ms ({avail_ms:.2f} ms). Detects repeat "
+                f"periods from {min_period_us:g} µs up to {longest_us:.0f} µs "
+                f"({1e6 / longest_us:.0f} Hz to {1e3 / min_period_us:.3g} kHz)."
+            )
+            bad = longest_us < 3 * min_period_us
+            if bad:
+                text = "⚠ " + text + " Too short to be useful: lengthen the Scope window."
+        self.lbl_catch_window_info.setText(text)
+        self.lbl_catch_window_info.setStyleSheet(
+            f"color: {style.BAD if bad else style.TXT_MUTED}; font-size: 8pt;"
+        )
+
+    def _on_catch_classifier_changed(self, *_args) -> None:
+        self._update_catch_window_info()
+        self._save_settings()
+        self._refresh_tiles()
+        if isinstance(self._worker, CatchPipeline):
+            self._worker.set_classifier_config(self._build_catch_classifier_config())
+
+    def _on_mirror_voltages_changed(self, text: str) -> None:
+        self._save_settings()
+        if isinstance(self._worker, CatchPipeline):
+            self._worker.set_mirror_voltages(text)
+
+    def _on_catch_mode_toggled(self, checked: bool) -> None:
+        if checked:
+            self.combo_channel.setCurrentText("A")      # A is always the trigger / lobe channel
+        self.combo_channel.setEnabled(not checked)
+        self._bottom_stack.setCurrentIndex(1 if checked else 0)
+        self._apply_catch_plot_mode(checked)
+        self._update_catch_window_info()
+        self._set_controls_idle() if self._worker is None else self._set_controls_running()
+        self._save_settings()
+        self._refresh_tiles()
+
+    def _on_catch_reset_clicked(self) -> None:
+        self._catch_counters.reset()
+        self._on_catch_counts(self._catch_counters.snapshot())
+
+    # -- running ---------------------------------------------------------
+
+    def _start_catch_run(self) -> None:
+        """Start a catch-capture run (new session folder, counts from zero)."""
+        if not self.chk_trigger_enable.isChecked():
+            self._on_error("Catch capture needs the trigger enabled (Trigger panel).")
+            return
+        if not self._configure_catch_hardware():
+            return
+        self._catch_counters.reset()
+        self._catch_recorder = CatchRecorder(CatchRecorder.default_base_dir())
+        self._catch_last_saved = ""
+        self._start_catch_pipeline()
+        self.channels.daq_busy.emit(True)
+        self._set_controls_running()
+        self._set_status("Running (catch capture)")
+
+    def _configure_catch_hardware(self) -> bool:
+        try:
+            config_a, config_b = self._build_catch_acq_configs()
+            self._service.configure_channels_dual(config_a, config_b)
+            self._service.set_trigger(config_a, auto_trigger_ms=self.spin_trigger_auto.value())
+        except Exception as exc:
+            self._on_error(f"Hardware config error: {exc}")
+            return False
+        return True
+
+    def _start_catch_pipeline(self) -> None:
+        config_a, config_b = self._build_catch_acq_configs()
+        trigger = TriggerInfo(
+            enabled=True,
+            threshold_v=self.spin_trigger_threshold.value() / 1000.0,
+            direction=self._trigger_direction_value(),
+            auto_timeout_ms=self.spin_trigger_auto.value(),
+        )
+        pipe = CatchPipeline(
+            self._service, config_a, config_b, trigger,
+            self._build_catch_classifier_config(), self._catch_recorder,
+            counters=self._catch_counters,
+            mirror_voltages=self.edit_mirror_voltages.text(),
+        )
+        pipe.trace_ready.connect(self._on_catch_trace)
+        pipe.counts_changed.connect(self._on_catch_counts)
+        pipe.catch_saved.connect(self._on_catch_saved)
+        pipe.error_occurred.connect(self._on_error)
+        self._worker = pipe
+        pipe.start()
+
+    def _restart_catch_pipeline(self) -> None:
+        """Re-apply hardware settings mid-run (same session folder and counts)."""
+        if not self._configure_catch_hardware():
+            self.channels.daq_busy.emit(False)
+            self._set_controls_idle()
+            return
+        self._start_catch_pipeline()
+        self._set_status("Running (catch capture)")
+
+    # -- results ---------------------------------------------------------
+
+    def _on_catch_trace(self, record, result) -> None:
+        """Latest analysed trace. A catch is held on screen for a few seconds."""
+        now = time.monotonic()
+        if result.is_catch:
+            self._catch_hold_until = now + _CATCH_HOLD_S
+        elif now < self._catch_hold_until or now - self._last_plot_update < _PLOT_MIN_INTERVAL_S:
+            return
+        self._last_plot_update = now
+
+        time_us = record.time_ns / 1e3
+        self._plot_item.setData(time_us, record.voltage_a * 1000.0)
+        self._catch_b_curve.setData(time_us, record.voltage_b * 1000.0)
+        self._last_time_us = time_us
+
+        pi = self.plot_widget.getPlotItem()
+        if result.is_catch:
+            line = (
+                f"CATCH  {result.frequency_hz / 1000.0:.3f} kHz  "
+                f"(A {result.a_coherence:.2f}, B {result.b_coherence:.2f})"
+            )
+            pi.setTitle(f"<span style='color:{style.GOOD}'>{line}</span>")
+        else:
+            line = f"Non-catch: {result.reason}"
+            pi.setTitle(f"Last trigger — {line}")
+        saved = f"\nSaved {self._catch_last_saved}" if self._catch_last_saved else ""
+        self.lbl_catch_last.setText(f"{line}{saved}")
+
+    def _on_catch_saved(self, path: str) -> None:
+        self._catch_last_saved = Path(path).name
+
+    def _on_catch_counts(self, snap: dict) -> None:
+        triggers = snap.get("triggers", 0)
+        catches = snap.get("catches", 0)
+        non_catches = snap.get("non_catches", 0)
+        analysed = catches + non_catches
+        elapsed = snap.get("elapsed_s", 0.0)
+        self._catch_stat_labels["triggers"].setText(str(triggers))
+        self._catch_stat_labels["catches"].setText(str(catches))
+        self._catch_stat_labels["non_catches"].setText(str(non_catches))
+        if analysed:
+            rate = f"{100.0 * catches / analysed:.2f} %"
+            if elapsed > 1.0:
+                rate += f"  ({catches / (elapsed / 60.0):.2f}/min)"
+            self._catch_stat_labels["rate"].setText(rate)
+        else:
+            self._catch_stat_labels["rate"].setText("–")
+        problems = []
+        if snap.get("dropped"):
+            problems.append(f"{snap['dropped']} dropped (analysis too slow)")
+        if snap.get("no_trigger_timeouts"):
+            problems.append(f"{snap['no_trigger_timeouts']} auto-trigger timeouts (not counted as triggers)")
+        if snap.get("errors"):
+            problems.append(f"{snap['errors']} errors")
+        self.lbl_catch_warn.setText("⚠ " + ", ".join(problems) if problems else "")
+        self.lbl_trace_count.setText(f"Triggers:  {triggers}")
+
+    def _apply_catch_plot_mode(self, on: bool) -> None:
+        """Waveform plot: A on the left axis, B on the right axis while in catch mode."""
+        pi = self.plot_widget.getPlotItem()
+        axis = pi.getAxis("right")
+        if on:
+            axis.setLabel("Channel B", units="mV")
+            axis.setVisible(True)
+            self._corr_viewbox.enableAutoRange(axis=pg.ViewBox.YAxis)
+            self._corr_curve.setVisible(False)
+            self._catch_b_curve.setVisible(True)
+            pi.setTitle("Catch capture — channel A (left), channel B (right)")
+        else:
+            self._catch_b_curve.setData([], [])
+            self._catch_b_curve.setVisible(False)
+            axis.setLabel("Correlation score", units="")
+            self._corr_viewbox.setYRange(-1.0, 1.0, padding=0)
+            pi.setTitle("Waveform")
+            self._update_corr_overlay_visibility(
+                self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER
+            )
 
     def _make_recorder_group(self) -> QGroupBox:
         box = QGroupBox("Data Recorder")
@@ -777,7 +1254,13 @@ class RatemeterPage(QWidget):
         scroll.setWidget(self._make_rates_frame())
         rates_lay.addWidget(scroll)
         lay.addWidget(rates_card, 1)
-        return strip
+
+        # Catch mode swaps the band table / readouts (not used there) for the catch dashboard.
+        self._bottom_stack = QStackedWidget()
+        self._bottom_stack.setMinimumHeight(130)
+        self._bottom_stack.addWidget(strip)
+        self._bottom_stack.addWidget(self._make_catch_dashboard())
+        return self._bottom_stack
 
     def _make_waveform_plot(self) -> QWidget:
         self.plot_widget = pg.PlotWidget()
@@ -821,6 +1304,11 @@ class RatemeterPage(QWidget):
         self._corr_curve = pg.PlotDataItem(pen=pg.mkPen(style.TXT, width=1, style=Qt.DotLine))
         self._corr_curve.setVisible(False)
         self._corr_viewbox.addItem(self._corr_curve)
+
+        # Channel B trace (catch capture mode only), drawn against the right axis.
+        self._catch_b_curve = pg.PlotDataItem(pen=pg.mkPen(style.TXT, width=1))
+        self._catch_b_curve.setVisible(False)
+        self._corr_viewbox.addItem(self._catch_b_curve)
         self._last_time_us = None
         self._last_corr_plot_update = 0.0
 
@@ -830,8 +1318,9 @@ class RatemeterPage(QWidget):
         self._corr_viewbox.setGeometry(self.plot_widget.getPlotItem().vb.sceneBoundingRect())
 
     def _update_corr_overlay_visibility(self, enabled: bool) -> None:
-        self.plot_widget.getPlotItem().getAxis("right").setVisible(enabled)
-        self._corr_curve.setVisible(enabled)
+        # In catch mode the right axis belongs to channel B and stays visible.
+        self.plot_widget.getPlotItem().getAxis("right").setVisible(enabled or self._catch_mode_on())
+        self._corr_curve.setVisible(enabled and not self._catch_mode_on())
         if not enabled:
             self._corr_curve.setData([], [])
 
@@ -1107,6 +1596,10 @@ class RatemeterPage(QWidget):
                 return
             self._set_label_good(self.lbl_connection, "Connected")
 
+        if self._catch_mode_on():
+            self._start_catch_run()
+            return
+
         config = self._build_config()
         try:
             acq_config = config.to_acquisition_config(
@@ -1142,6 +1635,9 @@ class RatemeterPage(QWidget):
         if not finished:
             self._worker.terminate()
             self._worker.wait(1000)
+        if isinstance(self._worker, CatchPipeline):
+            # The pipeline's own final counts signal may be discarded with it; show the totals directly.
+            self._on_catch_counts(self._worker.counters.snapshot())
         self._worker = None
 
         self.channels.daq_busy.emit(False)
@@ -1279,6 +1775,10 @@ class RatemeterPage(QWidget):
             self._worker.terminate()
             self._worker.wait(1000)
         self._worker = None
+
+        if self._catch_mode_on():
+            self._restart_catch_pipeline()
+            return
 
         config = self._build_config()
         try:
@@ -1535,6 +2035,16 @@ class RatemeterPage(QWidget):
             det = _DETECTION_MODE_SIMPLE
         self._tiles["detection"].set_values(det, warn=warn)
 
+        if self._catch_mode_on():
+            self._tiles["catch"].set_values(
+                "On · A + B",
+                [f"B {self.combo_catch_b_coupling.currentText()}  "
+                 f"{self.combo_catch_b_probe.currentText()}  {self.combo_catch_b_range.currentText()}",
+                 f"analyse from {self.spin_catch_start_ms.value():g} ms"],
+            )
+        else:
+            self._tiles["catch"].set_values("Off")
+
         width = ("FWHM", "20 %", "10 %")[max(0, min(2, self.combo_width_rel_height.currentIndex()))]
         self._tiles["rates"].set_values(
             f"{self.spin_rate_avg.value()} s avg · {self.spin_trend_window.value()} s trend · {width}"
@@ -1675,11 +2185,15 @@ class RatemeterPage(QWidget):
     def _set_controls_idle(self) -> None:
         self.btn_record.setEnabled(False)
         self.btn_timed_record.setEnabled(False)
+        self.chk_catch_mode.setEnabled(True)
         self._sync_switches()
 
     def _set_controls_running(self) -> None:
-        self.btn_record.setEnabled(True)
-        self.btn_timed_record.setEnabled(True)
+        # The band recorders belong to the ratemeter; catch mode saves its own files.
+        catch = self._catch_mode_on()
+        self.btn_record.setEnabled(not catch)
+        self.btn_timed_record.setEnabled(not catch)
+        self.chk_catch_mode.setEnabled(False)       # stop the run to change mode
         self._sync_switches()
 
     @staticmethod
@@ -1772,6 +2286,24 @@ class RatemeterPage(QWidget):
             s.value("ratemeter/timed_recording_duration_s", 30, type=int)
         )
 
+        # Catch capture. Probe first (it determines the range combo's contents).
+        self.combo_catch_b_probe.setCurrentText(s.value("ratemeter/catch_b_probe", "x1", type=str))
+        b_range = self.combo_catch_b_range.findData(s.value("ratemeter/catch_b_range_v", 0.02, type=float))
+        self.combo_catch_b_range.setCurrentIndex(b_range if b_range >= 0 else 0)
+        self.combo_catch_b_coupling.setCurrentText(s.value("ratemeter/catch_b_coupling", "DC", type=str))
+        self.chk_catch_b_bw.setChecked(s.value("ratemeter/catch_b_bw", False, type=bool))
+        self.spin_catch_start_ms.setValue(s.value("ratemeter/catch_start_ms", 3.5, type=float))
+        self.spin_catch_end_ms.setValue(s.value("ratemeter/catch_end_ms", 0.0, type=float))
+        self.spin_catch_min_cycles.setValue(s.value("ratemeter/catch_min_cycles", 5.0, type=float))
+        self.spin_catch_min_period_us.setValue(s.value("ratemeter/catch_min_period_us", 20.0, type=float))
+        self.spin_catch_a_coherence.setValue(s.value("ratemeter/catch_a_coherence", 0.40, type=float))
+        self.spin_catch_b_coherence.setValue(s.value("ratemeter/catch_b_coherence", 0.30, type=float))
+        self.spin_catch_fold_snr.setValue(s.value("ratemeter/catch_fold_snr", 1.0, type=float))
+        self.spin_catch_b_shape.setValue(s.value("ratemeter/catch_b_shape", 0.10, type=float))
+        self.edit_mirror_voltages.setText(s.value("ratemeter/catch_mirror_voltages", "", type=str))
+        self.chk_catch_mode.setChecked(s.value("ratemeter/catch_mode", False, type=bool))
+        self._on_catch_mode_toggled(self.chk_catch_mode.isChecked())
+
         self._on_trigger_enabled_changed()
         self._on_detection_mode_changed()
         self._update_plot_axes()
@@ -1849,6 +2381,22 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/bands", json.dumps(bands))
 
         s.setValue("ratemeter/timed_recording_duration_s", self.spin_timed_duration.value())
+
+        s.setValue("ratemeter/catch_mode", self.chk_catch_mode.isChecked())
+        s.setValue("ratemeter/catch_mirror_voltages", self.edit_mirror_voltages.text())
+        s.setValue("ratemeter/catch_b_probe", self.combo_catch_b_probe.currentText())
+        b_native = self.combo_catch_b_range.currentData()
+        s.setValue("ratemeter/catch_b_range_v", b_native if b_native is not None else 0.02)
+        s.setValue("ratemeter/catch_b_coupling", self.combo_catch_b_coupling.currentText())
+        s.setValue("ratemeter/catch_b_bw", self.chk_catch_b_bw.isChecked())
+        s.setValue("ratemeter/catch_start_ms", self.spin_catch_start_ms.value())
+        s.setValue("ratemeter/catch_end_ms", self.spin_catch_end_ms.value())
+        s.setValue("ratemeter/catch_min_cycles", self.spin_catch_min_cycles.value())
+        s.setValue("ratemeter/catch_min_period_us", self.spin_catch_min_period_us.value())
+        s.setValue("ratemeter/catch_a_coherence", self.spin_catch_a_coherence.value())
+        s.setValue("ratemeter/catch_b_coherence", self.spin_catch_b_coherence.value())
+        s.setValue("ratemeter/catch_fold_snr", self.spin_catch_fold_snr.value())
+        s.setValue("ratemeter/catch_b_shape", self.spin_catch_b_shape.value())
 
     # ------------------------------------------------------------------
     # Cleanup

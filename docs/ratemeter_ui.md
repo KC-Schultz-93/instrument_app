@@ -6,11 +6,12 @@ The original refactor spec is `ratemeter_ui_refactor.md`.
 ## Layout
 
 - **Status block** (top-left): `lbl_status` (coloured idle / running / error) and `lbl_trace_count`.
-- **Top bar**: Scope, Trigger and Captures tiles.
+- **Top bar**: Scope, Trigger, Captures and Catch tiles.
 - The Connect and Run switches (`sw_connect`, `sw_run`) live in the status block, with `lbl_connection` under the status text.
 - **Left rail**: Channel, Detection, Rates tiles; Data Recorder pinned at the bottom.
 - **Dock**: click a tile to open its panel, click the same tile to close it, click another tile to swap. Closed on launch.
-- **Plots**: waveform and rate trend. **Bottom strip**: band table + Add/Remove, live band readouts.
+- **Plots**: waveform and rate trend. **Bottom strip**: band table + Add/Remove and live band readouts; in catch
+  mode it swaps to the catch dashboard (mirror voltages, live counts, last result).
 
 ## Tiles
 
@@ -22,6 +23,7 @@ The original refactor spec is `ratemeter_ui_refactor.md`.
 | Captures | captures per batch | ±1 |
 | Detection | detection mode + matched-filter controls | – |
 | Rates | rate averaging, trend window, width-at-height | – |
+| Catch (top bar) | catch mode switch, channel B setup, classifier thresholds (see `catch_capture.md`) | – |
 
 Scope also shows derived *Samples* and *Sample rate* (`_derived_scope_values()`, equal to
 `RatemeterConfig.num_samples`). A ⚠ badge on Scope/Detection means the matched-filter window warning is active.
@@ -32,6 +34,8 @@ Scope also shows derived *Samples* and *Sample rate* (`_derived_scope_values()`,
 - Connect/Run switches use `clicked` and are re-synced from real state by `_sync_switches()` after every handler,
   so failures and "PicoScope busy" snap them back.
 - `_load_settings()` sets `_loading_settings` so widget signals fired during load do not overwrite unread keys.
+- The dock sizes itself to its widest page, so every panel must wrap its labels (an unwrapped label once clipped every
+  panel's right edge); `tests/test_ratemeter_catch_ui.py` guards this.
 - New reusable widgets live in `ui/`: `ToggleSwitch`, `ParamTile`, `DockHost`, `CardFrame`.
 
 ## Tests

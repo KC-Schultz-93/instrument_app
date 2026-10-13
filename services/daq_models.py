@@ -59,6 +59,25 @@ class WaveformRecord:
 
 
 # ---------------------------------------------------------------------------
+# Two-channel waveform record (catch capture)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DualWaveformRecord:
+    """One trace acquired on channels A and B simultaneously, in physical units."""
+
+    trace_id: int
+    timestamp: datetime
+    voltage_a: np.ndarray       # float64, true (probe-scaled) volts
+    voltage_b: np.ndarray       # float64, true (probe-scaled) volts
+    time_ns: np.ndarray         # float64, nanoseconds from the first sample
+    sample_interval_ns: int     # actual achieved interval
+    config_a: AcquisitionConfig
+    config_b: AcquisitionConfig
+    metadata: dict = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
 # Per-peak record
 # ---------------------------------------------------------------------------
 

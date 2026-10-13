@@ -62,6 +62,9 @@ Recorded Data/
 | `services/acquisition_worker.py` | `QThread` worker wiring PicoScope → detection → extraction → physics → logging |
 | `services/daq_logger.py` | Saving raw traces, reduced summaries, run metadata, mass histograms |
 | `services/daq_channels.py` | Qt signal bus for the DAQ page/worker — DAQ-only, not shared with serial/pressure |
+| `services/catch_classifier.py` | Catch decision: does an A+B trace show a caught particle (pure numpy/scipy) |
+| `services/catch_recorder.py` | Saving kept catch waveforms (raw CSV + JSON + index) and reading PicoScope CSVs |
+| `services/catch_worker.py` | Catch pipeline: acquisition thread, queue, analysis thread, counters |
 | `services/serial_manager.py` | Serial comms to Arduino — **do not touch** |
 | `services/pressure_logger.py` | Pressure logging (daily-rotating UHV/Foreline CSVs) — **do not touch** |
 
