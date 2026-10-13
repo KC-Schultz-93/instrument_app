@@ -30,8 +30,17 @@ class AcquisitionConfig:
 
     trigger_enabled: bool = False
     trigger_threshold_v: Optional[float] = None
-    trigger_direction: str = "RISING"   # "RISING" or "FALLING"
+    trigger_direction: str = "RISING"   # "RISING" | "FALLING" | ... | "RUNT_POSITIVE" | "RUNT_NEGATIVE"
     pre_trigger_samples: int = 0        # samples captured before trigger point
+
+    # Runt trigger only (trigger_direction in {"RUNT_POSITIVE", "RUNT_NEGATIVE"}):
+    # the second threshold the pulse must NOT fully cross. Always the
+    # "inner"/baseline-side threshold by magnitude — trigger_threshold_v is
+    # always the "outer"/peak-side threshold — regardless of polarity; the
+    # PicoScope service maps the two onto the driver's upper/lower ADC
+    # thresholds by numeric sign, not by field name. None for non-runt triggers.
+    trigger_threshold_lower_v: Optional[float] = None
+    trigger_hysteresis_v: float = 0.0   # hysteresis band, both edge and runt thresholds
 
     invert_polarity: bool = False       # negate voltage after ADC conversion
     bandwidth_limit_enabled: bool = False   # PS4000 200 kHz bandwidth limiter (4262 only)
@@ -192,6 +201,8 @@ class RatemeterConfig:
         trigger_enabled: bool = False,
         trigger_threshold_v: float = 0.0,
         trigger_direction: str = "RISING",
+        trigger_threshold_lower_v: Optional[float] = None,
+        trigger_hysteresis_v: float = 0.0,
     ) -> "AcquisitionConfig":
         return AcquisitionConfig(
             channel=self.channel,
@@ -202,6 +213,8 @@ class RatemeterConfig:
             trigger_enabled=trigger_enabled,
             trigger_threshold_v=trigger_threshold_v,
             trigger_direction=trigger_direction,
+            trigger_threshold_lower_v=trigger_threshold_lower_v,
+            trigger_hysteresis_v=trigger_hysteresis_v,
             bandwidth_limit_enabled=self.bandwidth_limit_enabled,
             probe_factor=self.probe_factor,
         )
@@ -227,6 +240,48 @@ class MatchedFilterConfig:
 
     # Template stretch factors swept per trace; duration bounds scale with each.
     scale_factors: List[float] = field(default_factory=lambda: [1.0])
+
+
+@dataclass
+class EchoValidationConfig:
+    """
+    Post-capture validator: a captured segment is kept only if a second
+    pulse, shape-matching the first, follows within
+    [echo_min_us, echo_max_us]. See docs/runt_trigger_plan.md.
+    """
+
+    enabled: bool = False
+    echo_min_us: float = 80.0
+    echo_max_us: float = 150.0
+    echo_corr_threshold: float = 0.8    # independent of MatchedFilterConfig.correlation_threshold
+    amp_ratio_min: float = 0.0          # 0 = off; else min(|first|,|echo|)/max(|first|,|echo|) must exceed this
+
+
+@dataclass
+class EchoValidationResult:
+    """Outcome of validating one captured segment against EchoValidationConfig."""
+
+    accepted: bool
+    reason: str   # "ok" | "no_first_pulse" | "no_echo" | "low_correlation" |
+                  # "amplitude_ratio" | "echo_is_prior_trigger"
+    first_pulse_time_us: Optional[float] = None
+    echo_time_us: Optional[float] = None
+    echo_lag_us: Optional[float] = None
+    echo_correlation: Optional[float] = None
+    amplitude_ratio: Optional[float] = None
+
+
+@dataclass
+class NoiseStatsResult:
+    """Result of one noise-calibration measurement. Advisory only."""
+
+    rms_v: float
+    peak_to_peak_v: float
+    sigma_robust_v: float
+    suggested_threshold_v: float
+    crossing_rate_hz: float
+    range_v: float          # voltage range used for the measurement
+    measured_at: datetime
 
 
 @dataclass

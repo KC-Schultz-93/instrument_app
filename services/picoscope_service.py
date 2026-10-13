@@ -60,17 +60,83 @@ _COUPLING_MAP = {
     "DC": 1,
 }
 
-# Trigger direction (THRESHOLD_DIRECTION)
+# Trigger direction (THRESHOLD_DIRECTION) — values confirmed from
+# ps4000Api.h's enThresholdDirection. RUNT_POSITIVE/RUNT_NEGATIVE are not part
+# of the driver's own enum names (those are POSITIVE_RUNT/NEGATIVE_RUNT); the
+# RUNT_ prefix here is this app's own AcquisitionConfig.trigger_direction
+# vocabulary, kept distinct from the driver's naming.
 _DIRECTION_MAP = {
     "ABOVE":          0,
     "BELOW":          1,
     "RISING":         2,
     "FALLING":        3,
     "RISING_OR_FALLING": 4,
+    "RUNT_POSITIVE":  9,   # POSITIVE_RUNT
+    "RUNT_NEGATIVE":  10,  # NEGATIVE_RUNT
 }
+
+_RUNT_DIRECTIONS = {"RUNT_POSITIVE", "RUNT_NEGATIVE"}
+
+# THRESHOLD_MODE (ps4000Api.h enThresholdMode). Runt trigger always uses
+# LEVEL — WINDOW is a different (inside/outside-band) trigger type.
+_THRESHOLD_MODE_LEVEL = 0
+
+# TRIGGER_STATE (ps4000Api.h enTriggerState), used in TRIGGER_CONDITIONS.
+_TRIGGER_STATE_DONT_CARE = 0
+_TRIGGER_STATE_TRUE = 1
 
 # ADC full-scale count for ps4000 series
 _ADC_MAX = 32512
+
+# PS4000_TIME_UNITS (ps4000Api.h enPS4000TimeUnits) -> nanoseconds-per-unit,
+# for converting ps4000GetValuesTriggerTimeOffsetBulk64's raw int64 values.
+_TIME_UNIT_TO_NS = {
+    0: 1e-6,   # PS4000_FS (femtoseconds)
+    1: 1e-3,   # PS4000_PS (picoseconds)
+    2: 1.0,    # PS4000_NS
+    3: 1e3,    # PS4000_US
+    4: 1e6,    # PS4000_MS
+    5: 1e9,    # PS4000_S
+}
+
+
+class _TriggerChannelProperties(ctypes.Structure):
+    """
+    Mirrors ps4000Api.h's tTriggerChannelProperties exactly (#pragma pack(1)).
+    The installed picosdk ps4000.py wrapper types this parameter as a plain
+    c_void_p (no struct class is provided), so this app defines its own.
+    """
+    _pack_ = 1
+    _fields_ = [
+        ("thresholdUpper", ctypes.c_int16),
+        ("thresholdUpperHysteresis", ctypes.c_uint16),
+        ("thresholdLower", ctypes.c_int16),
+        ("thresholdLowerHysteresis", ctypes.c_uint16),
+        ("channel", ctypes.c_int32),        # PS4000_CHANNEL
+        ("thresholdMode", ctypes.c_int32),  # THRESHOLD_MODE
+    ]
+
+
+class _TriggerConditions(ctypes.Structure):
+    """Mirrors ps4000Api.h's tTriggerConditions exactly (#pragma pack(1))."""
+    _pack_ = 1
+    _fields_ = [
+        ("channelA", ctypes.c_int32),
+        ("channelB", ctypes.c_int32),
+        ("channelC", ctypes.c_int32),
+        ("channelD", ctypes.c_int32),
+        ("external", ctypes.c_int32),
+        ("aux", ctypes.c_int32),
+        ("pulseWidthQualifier", ctypes.c_int32),
+    ]
+
+
+assert ctypes.sizeof(_TriggerChannelProperties) == 16, (
+    "TRIGGER_CHANNEL_PROPERTIES layout mismatch vs ps4000Api.h"
+)
+assert ctypes.sizeof(_TriggerConditions) == 28, (
+    "TRIGGER_CONDITIONS layout mismatch vs ps4000Api.h"
+)
 
 
 class PicoScopeService:
@@ -185,13 +251,22 @@ class PicoScopeService:
         return best_index, best_actual
 
     def set_trigger(self, config: AcquisitionConfig, auto_trigger_ms: int = 1000) -> None:
-        """Configure a simple edge trigger, or disable triggering."""
+        """
+        Configure a trigger, or disable triggering.
+
+        Dispatches to set_runt_trigger() when config.trigger_direction is
+        "RUNT_POSITIVE"/"RUNT_NEGATIVE" (runt needs two thresholds, set via
+        TriggerChannelProperties/Conditions/Directions — ps4000SetSimpleTrigger
+        only supports one threshold and cannot express it). Callers do not
+        need to choose between the two paths themselves.
+        """
         ps = self._get_ps()
 
         if not config.trigger_enabled:
             # Disable trigger by setting enabled=0. Pass auto_trigger_ms even
             # here: 4262 firmware may still apply the auto-trigger timer when
             # enabled=0, so hardcoding 0 ("wait forever") hangs indefinitely.
+            self._clear_trigger_conditions()
             status = ps.ps4000SetSimpleTrigger(
                 self._handle,
                 0,              # enabled = false
@@ -203,6 +278,15 @@ class PicoScopeService:
             )
             self._check_status(status, "ps4000SetSimpleTrigger(disabled)")
             return
+
+        if config.trigger_direction.upper() in _RUNT_DIRECTIONS:
+            self.set_runt_trigger(config, auto_trigger_ms)
+            return
+
+        # A previous run may have left a runt TriggerConditions/Directions
+        # configuration active; SetSimpleTrigger does not itself clear that
+        # state, so clear it explicitly before falling back to the simple path.
+        self._clear_trigger_conditions()
 
         threshold_v = config.trigger_threshold_v or 0.0
         # threshold_v is the desired true (probe-scaled) trigger level; convert
@@ -223,6 +307,120 @@ class PicoScopeService:
             auto_trigger_ms,     # autoTrigger_ms
         )
         self._check_status(status, "ps4000SetSimpleTrigger")
+
+    def set_runt_trigger(self, config: AcquisitionConfig, auto_trigger_ms: int = 1000) -> None:
+        """
+        Configure a runt trigger: the signal must cross the near threshold
+        (trigger_threshold_v) without fully crossing the far threshold
+        (trigger_threshold_lower_v) before returning — a pulse too short/small
+        to count as a full edge trigger, but distinguishable from noise.
+
+        Sign convention: trigger_threshold_v is always the "outer" (peak-side)
+        threshold and trigger_threshold_lower_v is always the "inner"
+        (baseline-side) threshold, regardless of RUNT_POSITIVE/RUNT_NEGATIVE —
+        this matches the header's own thresholdUpper/thresholdLower naming,
+        which encodes ADC magnitude, not polarity. For RUNT_POSITIVE,
+        trigger_threshold_v must be the larger (upper) value; for
+        RUNT_NEGATIVE it must be the more negative (lower) value — the two
+        fields are mapped onto thresholdUpper/thresholdLower by numeric sign,
+        not by which field the caller used for which purpose.
+
+        Requires three driver calls in this order: SetTriggerChannelProperties
+        (thresholds + hysteresis), SetTriggerChannelConditions (which channel
+        must satisfy the trigger), SetTriggerChannelDirections (the runt
+        direction). All three must be set together or the driver ignores the
+        direction call.
+        """
+        ps = self._get_ps()
+
+        if config.trigger_threshold_lower_v is None:
+            raise ValueError(
+                "Runt trigger requires AcquisitionConfig.trigger_threshold_lower_v."
+            )
+
+        channel_enum = _CHANNEL_MAP.get(config.channel.upper())
+        if channel_enum is None:
+            raise ValueError(f"Unknown channel: {config.channel!r}. Use 'A' or 'B'.")
+
+        def to_adc(threshold_v: float) -> int:
+            adc = int((threshold_v / config.probe_factor) / config.voltage_range_v * _ADC_MAX)
+            return max(-_ADC_MAX, min(_ADC_MAX, adc))
+
+        threshold_v = config.trigger_threshold_v or 0.0
+        threshold_lower_v = config.trigger_threshold_lower_v
+        adc_a, adc_b = to_adc(threshold_v), to_adc(threshold_lower_v)
+        upper_adc, lower_adc = max(adc_a, adc_b), min(adc_a, adc_b)
+        if upper_adc == lower_adc:
+            raise ValueError(
+                "Runt trigger thresholds must differ: "
+                f"trigger_threshold_v={threshold_v!r}, "
+                f"trigger_threshold_lower_v={threshold_lower_v!r} "
+                "resolve to the same ADC count."
+            )
+
+        hysteresis_v = config.trigger_hysteresis_v or 0.0
+        hysteresis_adc = max(0, int((hysteresis_v / config.probe_factor) / config.voltage_range_v * _ADC_MAX))
+
+        props = _TriggerChannelProperties(
+            thresholdUpper=upper_adc,
+            thresholdUpperHysteresis=hysteresis_adc,
+            thresholdLower=lower_adc,
+            thresholdLowerHysteresis=hysteresis_adc,
+            channel=channel_enum,
+            thresholdMode=_THRESHOLD_MODE_LEVEL,
+        )
+        status = ps.ps4000SetTriggerChannelProperties(
+            self._handle,
+            ctypes.byref(props),
+            1,                   # nChannelProperties
+            0,                   # auxOutputEnable
+            auto_trigger_ms,
+        )
+        self._check_status(status, "ps4000SetTriggerChannelProperties")
+
+        conditions = _TriggerConditions(
+            channelA=_TRIGGER_STATE_TRUE if channel_enum == 0 else _TRIGGER_STATE_DONT_CARE,
+            channelB=_TRIGGER_STATE_TRUE if channel_enum == 1 else _TRIGGER_STATE_DONT_CARE,
+            channelC=_TRIGGER_STATE_TRUE if channel_enum == 2 else _TRIGGER_STATE_DONT_CARE,
+            channelD=_TRIGGER_STATE_TRUE if channel_enum == 3 else _TRIGGER_STATE_DONT_CARE,
+            external=_TRIGGER_STATE_DONT_CARE,
+            aux=_TRIGGER_STATE_DONT_CARE,
+            pulseWidthQualifier=_TRIGGER_STATE_DONT_CARE,
+        )
+        status = ps.ps4000SetTriggerChannelConditions(
+            self._handle, ctypes.byref(conditions), 1
+        )
+        self._check_status(status, "ps4000SetTriggerChannelConditions")
+
+        runt_direction = _DIRECTION_MAP[config.trigger_direction.upper()]
+        # Non-active channel slots get RISING (2) — the header's own NONE
+        # default — since those channels are CONDITION_DONT_CARE above and
+        # never gate the trigger; a valid enum is passed regardless, not 0.
+        directions = [2, 2, 2, 2, 2, 2]  # [A, B, C, D, ext, aux]
+        directions[channel_enum] = runt_direction
+        status = ps.ps4000SetTriggerChannelDirections(self._handle, *directions)
+        self._check_status(status, "ps4000SetTriggerChannelDirections")
+
+    def _clear_trigger_conditions(self) -> None:
+        """
+        Reset TriggerChannelConditions to all-DONT_CARE so a previous runt
+        trigger configuration doesn't linger alongside a newly-set simple
+        edge trigger or a disabled trigger.
+        """
+        ps = self._get_ps()
+        conditions = _TriggerConditions(
+            channelA=_TRIGGER_STATE_DONT_CARE,
+            channelB=_TRIGGER_STATE_DONT_CARE,
+            channelC=_TRIGGER_STATE_DONT_CARE,
+            channelD=_TRIGGER_STATE_DONT_CARE,
+            external=_TRIGGER_STATE_DONT_CARE,
+            aux=_TRIGGER_STATE_DONT_CARE,
+            pulseWidthQualifier=_TRIGGER_STATE_DONT_CARE,
+        )
+        status = ps.ps4000SetTriggerChannelConditions(
+            self._handle, ctypes.byref(conditions), 1
+        )
+        self._check_status(status, "ps4000SetTriggerChannelConditions(clear)")
 
     # ------------------------------------------------------------------
     # Acquisition
@@ -338,7 +536,12 @@ class PicoScopeService:
             metadata=metadata,
         )
 
-    def run_rapid_block(self, config: AcquisitionConfig, n_captures: int) -> List[WaveformRecord]:
+    def run_rapid_block(
+        self,
+        config: AcquisitionConfig,
+        n_captures: int,
+        ready_timeout_s: float = 30.0,
+    ) -> List[WaveformRecord]:
         """
         Run one rapid-block (segmented memory) acquisition round, capturing
         n_captures triggered waveforms in a single RunBlock round-trip.
@@ -348,6 +551,20 @@ class PicoScopeService:
         max samples per segment reported by ps4000MemorySegments for the
         requested n_captures (caller should reduce capture length or
         n_captures rather than expect silent truncation).
+
+        If the device never reports ready within ready_timeout_s (e.g. a rare
+        particle rate means not all n_captures segments filled), the batch is
+        stopped and whatever segments did complete are fetched and returned —
+        fewer than n_captures records, each flagged
+        metadata["partial_batch"] = True. Raises RuntimeError only if zero
+        segments completed.
+
+        Each returned record's metadata["trigger_offset_ns"] holds the
+        segment's trigger time relative to this batch's RunBlock call (from
+        ps4000GetValuesTriggerTimeOffsetBulk64) — useful for detecting when
+        one segment's "first pulse" is actually the validated echo of the
+        previous segment, but only meaningful within this one batch (there is
+        no absolute/wall-clock timestamp from the device).
         """
         ps = self._get_ps()
         timestamp = datetime.now()
@@ -408,16 +625,35 @@ class PicoScopeService:
         )
         self._check_status(status, "ps4000RunBlock")
 
-        # Poll until ready — identical pattern to run_block.
+        # Poll until ready, bounded by a wall-clock deadline rather than a
+        # fixed iteration count — a rare particle rate can leave some
+        # segments untriggered indefinitely, and the batch must still be
+        # salvageable rather than hanging forever.
         ready = ctypes.c_int16(0)
-        for _ in range(100_000):
+        deadline = time.monotonic() + ready_timeout_s
+        partial_batch = False
+        while True:
             status = ps.ps4000IsReady(self._handle, ctypes.byref(ready))
             self._check_status(status, "ps4000IsReady")
             if ready.value:
                 break
+            if time.monotonic() >= deadline:
+                partial_batch = True
+                break
             time.sleep(0.001)
-        else:
-            raise RuntimeError("PicoScope: run_rapid_block timed out waiting for ready.")
+
+        if partial_batch:
+            ps.ps4000Stop(self._handle)
+            n_completed = ctypes.c_uint16(0)
+            status = ps.ps4000GetNoOfCaptures(self._handle, ctypes.byref(n_completed))
+            self._check_status(status, "ps4000GetNoOfCaptures")
+            if n_completed.value == 0:
+                raise RuntimeError(
+                    f"PicoScope: run_rapid_block timed out after {ready_timeout_s}s "
+                    "waiting for ready; 0 of the requested captures completed."
+                )
+            n_captures = min(n_captures, n_completed.value)
+            buffers = buffers[:n_captures]
 
         n_samples = ctypes.c_uint32(config.num_samples)
         overflow = (ctypes.c_int16 * n_captures)()
@@ -429,6 +665,23 @@ class PicoScopeService:
             ctypes.byref(overflow),
         )
         self._check_status(status, "ps4000GetValuesBulk")
+
+        # Per-segment trigger time, relative to this batch's RunBlock call —
+        # lets the caller detect a segment whose "first pulse" is actually
+        # the previously-validated echo re-triggering (see run_rapid_block's
+        # docstring). Not available across separate run_rapid_block calls.
+        trigger_times_raw = (ctypes.c_int64 * n_captures)()
+        time_units = ctypes.c_int32(0)
+        status = ps.ps4000GetValuesTriggerTimeOffsetBulk64(
+            self._handle,
+            ctypes.byref(trigger_times_raw),
+            ctypes.byref(time_units),
+            0,                              # fromSegmentIndex
+            n_captures - 1,                 # toSegmentIndex
+        )
+        self._check_status(status, "ps4000GetValuesTriggerTimeOffsetBulk64")
+        unit_to_ns = _TIME_UNIT_TO_NS.get(time_units.value, 1.0)
+        trigger_offsets_ns = [t * unit_to_ns for t in trigger_times_raw]
 
         ps.ps4000Stop(self._handle)
 
@@ -449,6 +702,8 @@ class PicoScopeService:
                 "overflow": bool(overflow[segment_index]),
                 "n_values": n,
                 "segment_index": segment_index,
+                "trigger_offset_ns": trigger_offsets_ns[segment_index],
+                "partial_batch": partial_batch,
             }
 
             records.append(WaveformRecord(

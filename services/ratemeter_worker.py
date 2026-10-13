@@ -16,12 +16,14 @@ from __future__ import annotations
 import time
 from collections import deque
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from instrument_app.services.picoscope_service import PicoScopeService
 from instrument_app.services.daq_models import (
+    EchoValidationConfig,
+    EchoValidationResult,
     MatchedFilterConfig,
     PeakRecord,
     RatemeterConfig,
@@ -32,7 +34,7 @@ from instrument_app.services.signal_extractor import SignalExtractor
 
 
 class RatemeterWorker(QThread):
-    rates_updated = pyqtSignal(object)       # dict with "rates"/"transits"/"fractions"/"velocities"
+    rates_updated = pyqtSignal(object)       # dict with "rates"/"transits"/"fractions"/"velocities"/"all_rate_hz"/"validated_rate_hz"
     waveform_ready = pyqtSignal(object)       # WaveformRecord  (latest trace, for plot)
     error_occurred = pyqtSignal(str)
     status_update = pyqtSignal(str)
@@ -40,6 +42,7 @@ class RatemeterWorker(QThread):
     peak_event = pyqtSignal(object)           # RatemeterEvent — one per detected peak, always emitted
     raw_peaks_detected = pyqtSignal(object)   # List[PeakRecord] — every peak in this record, pre band-match
     correlation_ready = pyqtSignal(object)    # np.ndarray — normalized correlation, matched filter mode only
+    segment_validated = pyqtSignal(object, object)  # (WaveformRecord, EchoValidationResult) — echo validation on, one per segment
 
     _RATE_EMIT_INTERVAL_S = 0.5
 
@@ -52,13 +55,17 @@ class RatemeterWorker(QThread):
         trigger_threshold_v: float,
         trigger_direction: str,
         captures_per_batch: int = 1,
+        trigger_threshold_lower_v: Optional[float] = None,
+        trigger_hysteresis_v: float = 0.0,
+        echo_config: Optional[EchoValidationConfig] = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._service = service
         self._config = config
         self._acq_config = config.to_acquisition_config(
-            trigger_enabled, trigger_threshold_v, trigger_direction
+            trigger_enabled, trigger_threshold_v, trigger_direction,
+            trigger_threshold_lower_v, trigger_hysteresis_v,
         )
         self._captures_per_batch = max(1, captures_per_batch)
         self._extractor = SignalExtractor()
@@ -70,6 +77,17 @@ class RatemeterWorker(QThread):
         else:
             self._matcher = None
 
+        # Echo validation reuses the matched-filter detection pipeline (see
+        # docs/runt_trigger_plan.md), so it only activates when matched-filter
+        # mode is also enabled — with simple-threshold detection there is no
+        # shape-correlation score to validate an echo against.
+        self._echo_config = echo_config
+        if echo_config is not None and echo_config.enabled and self._matcher is not None:
+            from instrument_app.services.echo_validator import EchoValidator
+            self._echo_validator = EchoValidator(echo_config, self._matcher)
+        else:
+            self._echo_validator = None
+
         self._stop_flag = False
         self._trace_id = 0
         self._hit_times: Dict[str, deque] = {b.label: deque() for b in config.bands}
@@ -78,6 +96,16 @@ class RatemeterWorker(QThread):
         # velocity deque stores (timestamp_monotonic, velocity_m_s) tuples
         self._loop_start = 0.0
         self._last_rate_emit = 0.0
+
+        # All-trigger vs. validated-event rate counters (independent of band
+        # membership) — only populated when echo validation is active.
+        self._all_trigger_times: deque = deque()
+        self._validated_trigger_times: deque = deque()
+        # Absolute (batch-relative) device time of the most recently accepted
+        # segment's echo pulse, for detecting a segment whose "first pulse"
+        # is actually that same echo re-triggering. Reset at the start of
+        # every run_rapid_block() batch (see docstring on _process_record).
+        self._last_validated_echo_abs_ns: Optional[float] = None
 
     def request_stop(self) -> None:
         self._stop_flag = True
@@ -93,8 +121,14 @@ class RatemeterWorker(QThread):
                         self._acq_config, self._captures_per_batch
                     )
 
+                # trigger_offset_ns (when present) is relative to this batch's
+                # RunBlock call only — comparisons across batches aren't
+                # meaningful, so the echo-duplicate tracker resets here.
+                self._last_validated_echo_abs_ns = None
+
                 for record in records:
                     self._trace_id += 1
+                    record.trace_id = self._trace_id
                     self._process_record(record)
 
                 now = time.monotonic()
@@ -126,6 +160,9 @@ class RatemeterWorker(QThread):
                 )
                 for evt in events
             ]
+
+            if self._echo_validator is not None:
+                peaks = self._apply_echo_validation(record, events, peaks)
         else:
             # --- Simple threshold path ---
             # Use the lowest band boundary (×0.9) as the height threshold so
@@ -200,6 +237,62 @@ class RatemeterWorker(QThread):
         self.waveform_ready.emit(record)
         self.trace_count_changed.emit(self._trace_id)
 
+    def _apply_echo_validation(self, record, events, peaks: List[PeakRecord]) -> List[PeakRecord]:
+        """
+        Run echo validation for one segment (once per segment, not per peak):
+        on rejection, this segment's peaks are excluded from band counting
+        (returns []) so the main rate display reflects validated events only,
+        per docs/runt_trigger_plan.md's own recommendation — the "all
+        triggers" count (self._all_trigger_times) is still bumped regardless,
+        as a secondary diagnostic for judging the false-trigger rate.
+
+        Also rejects a segment whose first pulse coincides with the previous
+        segment's validated echo (the echo re-triggering its own segment —
+        see run_rapid_block()'s trigger_offset_ns), overriding the
+        validator's own per-segment result.
+        """
+        result = self._echo_validator.validate_events(events)
+
+        trigger_offset_ns = record.metadata.get("trigger_offset_ns")
+        if (
+            result.accepted
+            and trigger_offset_ns is not None
+            and self._last_validated_echo_abs_ns is not None
+            and result.first_pulse_time_us is not None
+        ):
+            first_abs_ns = trigger_offset_ns + result.first_pulse_time_us * 1_000.0
+            tolerance_ns = 2.0 * record.sample_interval_ns
+            if abs(first_abs_ns - self._last_validated_echo_abs_ns) <= tolerance_ns:
+                result = EchoValidationResult(
+                    accepted=False,
+                    reason="echo_is_prior_trigger",
+                    first_pulse_time_us=result.first_pulse_time_us,
+                    echo_time_us=result.echo_time_us,
+                    echo_lag_us=result.echo_lag_us,
+                    echo_correlation=result.echo_correlation,
+                    amplitude_ratio=result.amplitude_ratio,
+                )
+
+        now = time.monotonic()
+        self._all_trigger_times.append(now)
+        if result.accepted:
+            self._validated_trigger_times.append(now)
+            if trigger_offset_ns is not None and result.echo_time_us is not None:
+                self._last_validated_echo_abs_ns = (
+                    trigger_offset_ns + result.echo_time_us * 1_000.0
+                )
+
+        record.metadata["echo_validated"] = result.accepted
+        record.metadata["echo_reason"] = result.reason
+        record.metadata["echo_first_pulse_us"] = result.first_pulse_time_us
+        record.metadata["echo_lag_us"] = result.echo_lag_us
+        record.metadata["echo_correlation"] = result.echo_correlation
+        record.metadata["echo_amp_ratio"] = result.amplitude_ratio
+
+        self.segment_validated.emit(record, result)
+
+        return peaks if result.accepted else []
+
     def _compute_rates(self, now: float) -> dict:
         cutoff = now - self._config.rate_averaging_s
         elapsed = min(now - self._loop_start, self._config.rate_averaging_s)
@@ -238,9 +331,24 @@ class RatemeterWorker(QThread):
                 sum(v for _, v in vdq) / len(vdq) if vdq else None
             )
 
+        all_rate_hz: Optional[float] = None
+        validated_rate_hz: Optional[float] = None
+        if self._echo_validator is not None:
+            adq = self._all_trigger_times
+            while adq and adq[0] < cutoff:
+                adq.popleft()
+            vdq2 = self._validated_trigger_times
+            while vdq2 and vdq2[0] < cutoff:
+                vdq2.popleft()
+            all_rate_hz = len(adq) / elapsed if elapsed > 0 else 0.0
+            validated_rate_hz = len(vdq2) / elapsed if elapsed > 0 else 0.0
+
         return {
             "rates": rates,
             "transits": transits,
             "fractions": fractions,
             "velocities": velocities,
+            # None when echo validation is off (no secondary diagnostic to show).
+            "all_rate_hz": all_rate_hz,
+            "validated_rate_hz": validated_rate_hz,
         }

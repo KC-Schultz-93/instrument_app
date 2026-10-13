@@ -68,12 +68,14 @@ from PyQt5.QtWidgets import (
 from instrument_app.services.daq_channels import DAQChannels
 from instrument_app.services.daq_models import (
     AmplitudeBand,
+    EchoValidationConfig,
     MatchedFilterConfig,
     PeakRecord,
     RatemeterConfig,
     RatemeterEvent,
     TimedRecordingSummary,
 )
+from instrument_app.services.noise_measurement_worker import NoiseMeasurementWorker
 from instrument_app.services.picoscope_service import PicoScopeService
 from instrument_app.services.probe_config import (
     NATIVE_VOLTAGE_RANGES_V,
@@ -105,7 +107,10 @@ _TRIGGER_DIRECTIONS = {
     "Rising": "RISING",
     "Falling": "FALLING",
     "Rising or Falling": "RISING_OR_FALLING",
+    "Runt (+)": "RUNT_POSITIVE",
+    "Runt (-)": "RUNT_NEGATIVE",
 }
+_RUNT_DIRECTIONS = {"RUNT_POSITIVE", "RUNT_NEGATIVE"}
 
 _BAND_COLORS = [
     "#4fc3f7",  # light blue
@@ -210,6 +215,7 @@ class RatemeterPage(QWidget):
         self._service = PicoScopeService()
         self._worker: Optional[RatemeterWorker] = None
         self._daq_busy = False
+        self._noise_worker: Optional[NoiseMeasurementWorker] = None
 
         self._last_plot_update: float = 0.0
         self._band_lines: List[pg.InfiniteLine] = []
@@ -263,6 +269,7 @@ class RatemeterPage(QWidget):
             ("trigger", "Trigger", self._make_trigger_group()),
             ("captures", "Captures", self._make_captures_panel()),
             ("detection", "Detection", self._make_detection_mode_group()),
+            ("echo", "Echo Validation", self._make_echo_group()),
             ("rates", "Rates", self._make_rates_panel()),
         ]
         for key, title, panel in panels:
@@ -275,6 +282,7 @@ class RatemeterPage(QWidget):
             "trigger": ParamTile("Trigger", stepper=True),
             "captures": ParamTile("Captures", stepper=True),
             "detection": ParamTile("Detection"),
+            "echo": ParamTile("Echo Validation"),
             "rates": ParamTile("Rates"),
         }
         for key, tile in self._tiles.items():
@@ -381,7 +389,7 @@ class RatemeterPage(QWidget):
         lay = QVBoxLayout(rail)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
-        for key in ("channel", "detection", "rates"):
+        for key in ("channel", "detection", "echo", "rates"):
             lay.addWidget(self._tiles[key])
         lay.addStretch(1)
         lay.addWidget(self._make_recorder_group())
@@ -477,8 +485,18 @@ class RatemeterPage(QWidget):
         lay.addWidget(QLabel("Direction:"))
         self.combo_trigger_direction = QComboBox()
         self.combo_trigger_direction.addItems(list(_TRIGGER_DIRECTIONS.keys()))
-        self.combo_trigger_direction.currentIndexChanged.connect(self._schedule_restart)
+        self.combo_trigger_direction.currentIndexChanged.connect(self._on_trigger_direction_changed)
         lay.addWidget(self.combo_trigger_direction)
+
+        # Runt trigger only — the second (inner/baseline-side) threshold.
+        # trigger_threshold (above) is always the outer/peak-side threshold.
+        self.lbl_trigger_threshold_lower = QLabel("Lower threshold (mV):")
+        lay.addWidget(self.lbl_trigger_threshold_lower)
+        self.spin_trigger_threshold_lower = QDoubleSpinBox()
+        self.spin_trigger_threshold_lower.setRange(-10000.0, 10000.0)
+        self.spin_trigger_threshold_lower.setValue(0.0)
+        self.spin_trigger_threshold_lower.valueChanged.connect(self._schedule_restart)
+        lay.addWidget(self.spin_trigger_threshold_lower)
 
         lay.addWidget(QLabel("Auto-timeout (ms):"))
         self.spin_trigger_auto = QSpinBox()
@@ -486,6 +504,13 @@ class RatemeterPage(QWidget):
         self.spin_trigger_auto.setValue(1000)
         self.spin_trigger_auto.valueChanged.connect(self._schedule_restart)
         lay.addWidget(self.spin_trigger_auto)
+
+        self.btn_measure_noise = QPushButton("Measure noise")
+        self.btn_measure_noise.clicked.connect(self._on_measure_noise_clicked)
+        lay.addWidget(self.btn_measure_noise)
+        self.lbl_noise_result = QLabel("")
+        self.lbl_noise_result.setWordWrap(True)
+        lay.addWidget(self.lbl_noise_result)
 
         # Initial enabled state — do not route through _schedule_restart here,
         # since the waveform plot and band table don't exist yet during
@@ -495,6 +520,10 @@ class RatemeterPage(QWidget):
         self.spin_trigger_threshold.setEnabled(enabled)
         self.combo_trigger_direction.setEnabled(enabled)
         self.spin_trigger_auto.setEnabled(enabled)
+        is_runt = self._trigger_direction_value() in _RUNT_DIRECTIONS
+        self.spin_trigger_threshold_lower.setEnabled(enabled)
+        self.spin_trigger_threshold_lower.setVisible(is_runt)
+        self.lbl_trigger_threshold_lower.setVisible(is_runt)
         return box
 
     def _make_detection_mode_group(self) -> QWidget:
@@ -607,6 +636,78 @@ class RatemeterPage(QWidget):
 
         lay.addWidget(self._mf_controls)
         self._mf_controls.setVisible(False)
+        return box
+
+    def _make_echo_group(self) -> QWidget:
+        """
+        Echo validation (docs/runt_trigger_plan.md): a captured segment is
+        kept only if a second, shape-matching pulse follows the first within
+        this window. Reuses the Detection panel's matched-filter template —
+        it only has an effect when matched-filter mode is also enabled.
+        """
+        box, lay = self._make_panel()
+
+        self.chk_echo_enable = QCheckBox("Enable")
+        self.chk_echo_enable.stateChanged.connect(self._on_echo_enabled_changed)
+        lay.addWidget(self.chk_echo_enable)
+
+        self._echo_controls = QWidget()
+        self._echo_controls.setObjectName("EchoControls")
+        self._echo_controls.setStyleSheet("#EchoControls{background:transparent;}")
+        echo_lay = QVBoxLayout(self._echo_controls)
+        echo_lay.setContentsMargins(0, 0, 0, 0)
+
+        echo_lay.addWidget(QLabel("Echo window min (µs):"))
+        self.spin_echo_min_us = QDoubleSpinBox()
+        self.spin_echo_min_us.setRange(0.0, 10000.0)
+        self.spin_echo_min_us.setValue(80.0)
+        self.spin_echo_min_us.valueChanged.connect(self._schedule_restart)
+        echo_lay.addWidget(self.spin_echo_min_us)
+
+        echo_lay.addWidget(QLabel("Echo window max (µs):"))
+        self.spin_echo_max_us = QDoubleSpinBox()
+        self.spin_echo_max_us.setRange(0.0, 10000.0)
+        self.spin_echo_max_us.setValue(150.0)
+        self.spin_echo_max_us.valueChanged.connect(self._schedule_restart)
+        echo_lay.addWidget(self.spin_echo_max_us)
+
+        echo_lay.addWidget(QLabel("Echo correlation threshold:"))
+        self.spin_echo_corr_threshold = QDoubleSpinBox()
+        self.spin_echo_corr_threshold.setRange(0.0, 1.0)
+        self.spin_echo_corr_threshold.setSingleStep(0.05)
+        self.spin_echo_corr_threshold.setValue(0.8)
+        self.spin_echo_corr_threshold.valueChanged.connect(self._schedule_restart)
+        echo_lay.addWidget(self.spin_echo_corr_threshold)
+
+        echo_lay.addWidget(QLabel("Min amplitude ratio (0 = off):"))
+        self.spin_echo_amp_ratio_min = QDoubleSpinBox()
+        self.spin_echo_amp_ratio_min.setRange(0.0, 1.0)
+        self.spin_echo_amp_ratio_min.setSingleStep(0.05)
+        self.spin_echo_amp_ratio_min.setValue(0.0)
+        self.spin_echo_amp_ratio_min.valueChanged.connect(self._schedule_restart)
+        echo_lay.addWidget(self.spin_echo_amp_ratio_min)
+
+        self.chk_echo_save_raw = QCheckBox("Save validated raw traces (.npz)")
+        self.chk_echo_save_raw.setChecked(True)
+        self.chk_echo_save_raw.stateChanged.connect(self._save_settings)
+        echo_lay.addWidget(self.chk_echo_save_raw)
+
+        self.lbl_echo_rates = QLabel("")
+        self.lbl_echo_rates.setWordWrap(True)
+        self.lbl_echo_rates.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        echo_lay.addWidget(self.lbl_echo_rates)
+
+        note = QLabel(
+            "Requires matched-filter detection mode. Rejected segments are\n"
+            "excluded from band rate counting; the all-trigger count above\n"
+            "shows the false-trigger rate as a diagnostic."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {style.TXT_MUTED}; font-size: 9pt;")
+        echo_lay.addWidget(note)
+
+        lay.addWidget(self._echo_controls)
+        self._echo_controls.setVisible(False)
         return box
 
     def _make_rates_panel(self) -> QWidget:
@@ -1098,6 +1199,9 @@ class RatemeterPage(QWidget):
             return
         if self._worker is not None:
             return  # already running
+        if self._noise_worker is not None:
+            QMessageBox.warning(self, "PicoScope Busy", "A noise measurement is in progress.")
+            return
 
         if not self._service.is_connected:
             try:
@@ -1113,6 +1217,7 @@ class RatemeterPage(QWidget):
                 trigger_enabled=self.chk_trigger_enable.isChecked(),
                 trigger_threshold_v=self.spin_trigger_threshold.value() / 1000.0,
                 trigger_direction=self._trigger_direction_value(),
+                trigger_threshold_lower_v=self.spin_trigger_threshold_lower.value() / 1000.0,
             )
             self._service.configure_channel(acq_config)
             self._service.set_trigger(acq_config, auto_trigger_ms=self.spin_trigger_auto.value())
@@ -1152,10 +1257,13 @@ class RatemeterPage(QWidget):
         trigger_enabled = self.chk_trigger_enable.isChecked()
         trigger_threshold_v = self.spin_trigger_threshold.value() / 1000.0
         trigger_direction = self._trigger_direction_value()
+        trigger_threshold_lower_v = self.spin_trigger_threshold_lower.value() / 1000.0
 
         self._worker = RatemeterWorker(
             self._service, config, mf_config, trigger_enabled, trigger_threshold_v, trigger_direction,
             captures_per_batch=self.spin_captures_per_batch.value(),
+            trigger_threshold_lower_v=trigger_threshold_lower_v,
+            echo_config=self._build_echo_config(),
         )
         self._worker.rates_updated.connect(self._on_rates_updated)
         self._worker.waveform_ready.connect(self._on_waveform_ready)
@@ -1164,12 +1272,30 @@ class RatemeterPage(QWidget):
         self._worker.status_update.connect(self._on_status)
         self._worker.trace_count_changed.connect(self._on_trace_count)
         self._worker.peak_event.connect(self._on_peak_event)
+        self._worker.segment_validated.connect(self._on_segment_validated)
         self._worker.start()
 
     def _on_peak_event(self, event: RatemeterEvent) -> None:
         """Route peak events to the logger when recording is active."""
         if self._recording and self._logger:
             self._logger.save_event(event)
+
+    def _on_segment_validated(self, record, result) -> None:
+        """
+        Route one echo-validation result to the logger when recording is
+        active: every segment gets a row in the per-segment CSV; only
+        accepted segments also get a raw .npz trace (so rejected/noise
+        segments don't clutter the raw-trace folder).
+        """
+        if not (self._recording and self._logger):
+            return
+        self._logger.save_segment_result(
+            record.trace_id, record.timestamp, result,
+            partial_batch=bool(record.metadata.get("partial_batch", False)),
+        )
+        if result.accepted:
+            record.run_id = self._logger.run_id
+            self._logger.save_raw_trace(record)
 
     def _on_record_toggled(self, checked: bool) -> None:
         if checked:
@@ -1179,7 +1305,10 @@ class RatemeterPage(QWidget):
 
     def _start_recording(self) -> None:
         run_id = RatemeterLogger.make_run_id()
-        self._logger = RatemeterLogger(RatemeterLogger.default_base_dir(), run_id)
+        save_raw_traces = self.chk_echo_enable.isChecked() and self.chk_echo_save_raw.isChecked()
+        self._logger = RatemeterLogger(
+            RatemeterLogger.default_base_dir(), run_id, save_raw_traces=save_raw_traces,
+        )
         self._recording = True
         self.btn_record.setText("⏹  Stop Recording")
         self.lbl_recording.setText(f"● REC  {self._logger.path.name}")
@@ -1286,6 +1415,7 @@ class RatemeterPage(QWidget):
                 trigger_enabled=self.chk_trigger_enable.isChecked(),
                 trigger_threshold_v=self.spin_trigger_threshold.value() / 1000.0,
                 trigger_direction=self._trigger_direction_value(),
+                trigger_threshold_lower_v=self.spin_trigger_threshold_lower.value() / 1000.0,
             )
             self._service.configure_channel(acq_config)
             self._service.set_trigger(acq_config, auto_trigger_ms=self.spin_trigger_auto.value())
@@ -1313,13 +1443,69 @@ class RatemeterPage(QWidget):
         self.spin_trigger_threshold.setEnabled(enabled)
         self.combo_trigger_direction.setEnabled(enabled)
         self.spin_trigger_auto.setEnabled(enabled)
+        self.spin_trigger_threshold_lower.setEnabled(enabled)
         self._schedule_restart()
+
+    def _on_trigger_direction_changed(self, _index=None) -> None:
+        is_runt = self._trigger_direction_value() in _RUNT_DIRECTIONS
+        self.spin_trigger_threshold_lower.setVisible(is_runt)
+        self.lbl_trigger_threshold_lower.setVisible(is_runt)
+        self._schedule_restart()
+
+    def _on_measure_noise_clicked(self) -> None:
+        """Advisory-only: measures background noise with the ratemeter's
+        current channel settings and reports it — never writes back into
+        the trigger threshold controls itself."""
+        if self._daq_busy or self._worker is not None or self._noise_worker is not None:
+            return
+
+        if not self._service.is_connected:
+            try:
+                self._service.connect()
+            except Exception as exc:
+                self._on_error(f"Connect failed: {exc}")
+                return
+            self._set_label_good(self.lbl_connection, "Connected")
+            self._sync_switches()
+
+        config = self._build_config()
+        acq_config = config.to_acquisition_config(trigger_enabled=False)
+        # A longer capture than the live acquisition window gives a more
+        # stable noise estimate (plan: "tens of ms, or several blocks").
+        acq_config.num_samples = max(acq_config.num_samples, 50_000)
+
+        self.btn_measure_noise.setEnabled(False)
+        self.lbl_noise_result.setText("Measuring…")
+        self._noise_worker = NoiseMeasurementWorker(self._service, acq_config)
+        self._noise_worker.result_ready.connect(self._on_noise_result)
+        self._noise_worker.error_occurred.connect(self._on_noise_error)
+        self._noise_worker.finished.connect(self._on_noise_worker_finished)
+        self._noise_worker.start()
+
+    def _on_noise_result(self, stats) -> None:
+        self.lbl_noise_result.setText(
+            f"RMS {stats.rms_v * 1000:.4f} mV · σ_MAD {stats.sigma_robust_v * 1000:.4f} mV · "
+            f"p-p {stats.peak_to_peak_v * 1000:.3f} mV · suggested ≥{stats.suggested_threshold_v * 1000:.4f} mV · "
+            f"~{stats.crossing_rate_hz:.2f} false triggers/s · range ±{stats.range_v * 1000:.0f} mV · "
+            f"measured {stats.measured_at:%H:%M:%S}"
+        )
+
+    def _on_noise_error(self, msg: str) -> None:
+        self.lbl_noise_result.setText(f"Measurement failed: {msg}")
+
+    def _on_noise_worker_finished(self) -> None:
+        self._noise_worker = None
+        self._sync_switches()
 
     def _on_detection_mode_changed(self, _index=None) -> None:
         enabled = self.combo_detection_mode.currentText() == _DETECTION_MODE_MATCHED_FILTER
         self._mf_controls.setVisible(enabled)
         self._update_corr_overlay_visibility(enabled)
         self._update_mf_window_warning()
+        self._schedule_restart()
+
+    def _on_echo_enabled_changed(self, _state=None) -> None:
+        self._echo_controls.setVisible(self.chk_echo_enable.isChecked())
         self._schedule_restart()
 
     def _on_mf_use_empirical_changed(self, _state=None) -> None:
@@ -1464,6 +1650,17 @@ class RatemeterPage(QWidget):
 
         self.trend_widget.setXRange(-trend_window_s, 0, padding=0)
 
+        all_rate_hz = payload.get("all_rate_hz")
+        validated_rate_hz = payload.get("validated_rate_hz")
+        if all_rate_hz is not None and validated_rate_hz is not None:
+            kept_pct = (validated_rate_hz / all_rate_hz * 100.0) if all_rate_hz > 0 else 0.0
+            self.lbl_echo_rates.setText(
+                f"Validated: {validated_rate_hz:.2f} Hz  ·  All triggers: {all_rate_hz:.2f} Hz  ·  "
+                f"{kept_pct:.0f}% kept"
+            )
+        else:
+            self.lbl_echo_rates.setText("")
+
     def _on_trace_count(self, count: int) -> None:
         self.lbl_trace_count.setText(f"Traces:  {count}")
 
@@ -1522,8 +1719,17 @@ class RatemeterPage(QWidget):
         )
 
         if self.chk_trigger_enable.isChecked():
-            arrow = {"RISING": "↑", "FALLING": "↓"}.get(self._trigger_direction_value(), "⇅")
-            trig = f"{self.spin_trigger_threshold.value():g} mV {arrow}"
+            direction = self._trigger_direction_value()
+            arrow = {"RISING": "↑", "FALLING": "↓", "RUNT_POSITIVE": "⌐+", "RUNT_NEGATIVE": "⌐-"}.get(
+                direction, "⇅"
+            )
+            if direction in _RUNT_DIRECTIONS:
+                trig = (
+                    f"{self.spin_trigger_threshold.value():g}/"
+                    f"{self.spin_trigger_threshold_lower.value():g} mV {arrow}"
+                )
+            else:
+                trig = f"{self.spin_trigger_threshold.value():g} mV {arrow}"
         else:
             trig = "Off"
         self._tiles["trigger"].set_values(trig)
@@ -1534,6 +1740,14 @@ class RatemeterPage(QWidget):
         else:
             det = _DETECTION_MODE_SIMPLE
         self._tiles["detection"].set_values(det, warn=warn)
+
+        if self.chk_echo_enable.isChecked():
+            echo = f"{self.spin_echo_min_us.value():g}-{self.spin_echo_max_us.value():g} µs"
+            echo_warn = self.combo_detection_mode.currentText() != _DETECTION_MODE_MATCHED_FILTER
+        else:
+            echo = "Off"
+            echo_warn = False
+        self._tiles["echo"].set_values(echo, warn=echo_warn)
 
         width = ("FWHM", "20 %", "10 %")[max(0, min(2, self.combo_width_rel_height.currentIndex()))]
         self._tiles["rates"].set_values(
@@ -1583,6 +1797,13 @@ class RatemeterPage(QWidget):
             sw.setChecked(checked)
             sw.setEnabled(enabled)
             sw.blockSignals(False)
+
+        # "Measure noise" needs a connected, idle scope — same three-way gate
+        # as the acquisition Run switch (not running, not held by the DAQ page),
+        # plus not already mid-measurement.
+        self.btn_measure_noise.setEnabled(
+            connected and not running and not self._daq_busy and self._noise_worker is None
+        )
 
     def _set_status(self, text: str) -> None:
         """Write the status label and colour it by state (idle/running/error)."""
@@ -1665,6 +1886,15 @@ class RatemeterPage(QWidget):
             scale_factors=self._parse_mf_scales() or [1.0],
         )
 
+    def _build_echo_config(self) -> EchoValidationConfig:
+        return EchoValidationConfig(
+            enabled=self.chk_echo_enable.isChecked(),
+            echo_min_us=self.spin_echo_min_us.value(),
+            echo_max_us=self.spin_echo_max_us.value(),
+            echo_corr_threshold=self.spin_echo_corr_threshold.value(),
+            amp_ratio_min=self.spin_echo_amp_ratio_min.value(),
+        )
+
     def _trigger_direction_value(self) -> str:
         return _TRIGGER_DIRECTIONS.get(self.combo_trigger_direction.currentText(), "RISING")
 
@@ -1728,6 +1958,9 @@ class RatemeterPage(QWidget):
         self.combo_trigger_direction.setCurrentText(
             s.value("ratemeter/trigger_direction", "Rising", type=str)
         )
+        self.spin_trigger_threshold_lower.setValue(
+            s.value("ratemeter/trigger_threshold_lower_mv", 0.0, type=float)
+        )
         self.spin_trigger_auto.setValue(s.value("ratemeter/trigger_auto_ms", 1000, type=int))
         self.spin_rate_avg.setValue(s.value("ratemeter/rate_averaging_s", 10, type=int))
         self.spin_trend_window.setValue(s.value("ratemeter/trend_window_s", 60, type=int))
@@ -1765,6 +1998,19 @@ class RatemeterPage(QWidget):
         self.spin_mf_threshold.setValue(s.value("ratemeter/mf_corr_threshold", 0.35, type=float))
         self.spin_mf_min_spacing.setValue(s.value("ratemeter/mf_min_spacing_us", 50.0, type=float))
 
+        self.chk_echo_enable.setChecked(s.value("ratemeter/echo_enabled", False, type=bool))
+        self.spin_echo_min_us.setValue(s.value("ratemeter/echo_min_us", 80.0, type=float))
+        self.spin_echo_max_us.setValue(s.value("ratemeter/echo_max_us", 150.0, type=float))
+        self.spin_echo_corr_threshold.setValue(
+            s.value("ratemeter/echo_corr_threshold", 0.8, type=float)
+        )
+        self.spin_echo_amp_ratio_min.setValue(
+            s.value("ratemeter/echo_amp_ratio_min", 0.0, type=float)
+        )
+        self.chk_echo_save_raw.setChecked(
+            s.value("ratemeter/echo_save_raw_traces", True, type=bool)
+        )
+
         bands_json = s.value("ratemeter/bands", "", type=str)
         self._load_bands_from_json(bands_json)
 
@@ -1773,7 +2019,9 @@ class RatemeterPage(QWidget):
         )
 
         self._on_trigger_enabled_changed()
+        self._on_trigger_direction_changed()
         self._on_detection_mode_changed()
+        self._on_echo_enabled_changed()
         self._update_plot_axes()
         self._rebuild_band_dependent_ui()
         self._refresh_tiles()
@@ -1818,6 +2066,7 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/trigger_enabled", self.chk_trigger_enable.isChecked())
         s.setValue("ratemeter/trigger_threshold_mv", self.spin_trigger_threshold.value())
         s.setValue("ratemeter/trigger_direction", self.combo_trigger_direction.currentText())
+        s.setValue("ratemeter/trigger_threshold_lower_mv", self.spin_trigger_threshold_lower.value())
         s.setValue("ratemeter/trigger_auto_ms", self.spin_trigger_auto.value())
         s.setValue("ratemeter/rate_averaging_s", self.spin_rate_avg.value())
         s.setValue("ratemeter/trend_window_s", self.spin_trend_window.value())
@@ -1835,6 +2084,13 @@ class RatemeterPage(QWidget):
         s.setValue("ratemeter/mf_polarity", self.combo_mf_polarity.currentText())
         s.setValue("ratemeter/mf_corr_threshold", self.spin_mf_threshold.value())
         s.setValue("ratemeter/mf_min_spacing_us", self.spin_mf_min_spacing.value())
+
+        s.setValue("ratemeter/echo_enabled", self.chk_echo_enable.isChecked())
+        s.setValue("ratemeter/echo_min_us", self.spin_echo_min_us.value())
+        s.setValue("ratemeter/echo_max_us", self.spin_echo_max_us.value())
+        s.setValue("ratemeter/echo_corr_threshold", self.spin_echo_corr_threshold.value())
+        s.setValue("ratemeter/echo_amp_ratio_min", self.spin_echo_amp_ratio_min.value())
+        s.setValue("ratemeter/echo_save_raw_traces", self.chk_echo_save_raw.isChecked())
 
         bands = [
             {

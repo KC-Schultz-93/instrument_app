@@ -34,6 +34,7 @@ EXPECTED_KEYS = {
     "ratemeter/probe", "ratemeter/voltage_range_v", "ratemeter/sample_interval_ns",
     "ratemeter/window_duration_ms", "ratemeter/coupling", "ratemeter/trigger_enabled",
     "ratemeter/trigger_threshold_mv", "ratemeter/trigger_direction",
+    "ratemeter/trigger_threshold_lower_mv",
     "ratemeter/trigger_auto_ms", "ratemeter/rate_averaging_s", "ratemeter/trend_window_s",
     "ratemeter/width_rel_height_idx", "ratemeter/bandwidth_limit_enabled",
     "ratemeter/captures_per_batch", "ratemeter/detection_mode", "ratemeter/mf_pulse_us",
@@ -41,6 +42,10 @@ EXPECTED_KEYS = {
     "ratemeter/mf_template_path", "ratemeter/mf_use_empirical", "ratemeter/mf_polarity",
     "ratemeter/mf_corr_threshold", "ratemeter/mf_min_spacing_us", "ratemeter/bands",
     "ratemeter/timed_recording_duration_s",
+    # Echo-validated runt trigger (docs/runt_trigger_plan.md)
+    "ratemeter/echo_enabled", "ratemeter/echo_min_us", "ratemeter/echo_max_us",
+    "ratemeter/echo_corr_threshold", "ratemeter/echo_amp_ratio_min",
+    "ratemeter/echo_save_raw_traces",
 }
 
 
