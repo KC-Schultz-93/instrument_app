@@ -19,6 +19,7 @@ scope, so the true original signal is 1/10th of what the scope reads.
 """
 
 PROBE_FACTORS = {
+    "x0.002": 0.002,
     "x0.1": 0.1,
     "x1": 1.0,
     "x10": 10.0,

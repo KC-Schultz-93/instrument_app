@@ -53,7 +53,6 @@ class MainWindow(QMainWindow):
 
         # restore size/last tab
         self._restore_window_state()
-        self._clamp_max_size_to_screen()
 
     # ---------- UI ----------
     def _build_tabs(self):
@@ -215,27 +214,6 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(
             lambda i: self._settings.setValue("main/last_tab", i)
         )
-
-    def _clamp_max_size_to_screen(self):
-        """Never let the window (or a child layout demanding more space, e.g.
-        the pressure plot growing once live data arrives) exceed the actual
-        usable area of whichever monitor it's currently on."""
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is not None:
-            avail = screen.availableGeometry()
-            # The max applies to the client area, so leave room for the title
-            # bar / frame; otherwise a maximized window overflows the screen
-            # and Windows refuses to maximize it.
-            frame = self.frameGeometry().size() - self.geometry().size()
-            self.setMaximumSize(avail.width() - frame.width(), avail.height() - frame.height())
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._clamp_max_size_to_screen()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._clamp_max_size_to_screen()
 
     def closeEvent(self, ev):
         self._settings.setValue("main/geometry", self.saveGeometry())
