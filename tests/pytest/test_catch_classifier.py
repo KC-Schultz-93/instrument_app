@@ -3,18 +3,18 @@ test_catch_classifier.py
 -------------------------
 Offline tests for services/catch_classifier.py. No Qt, no hardware.
 
-The real-capture tests replay the first caught particle (tests/data/
+The real-capture tests replay the first caught particle (tests/pytest/data/
 catch_example_FIGURE_1.csv.gz, a PicoScope export). The synthetic cases build
 non-catch waveforms from the measured noise character so we can check what the
 classifier rejects until real non-catch captures are available.
 
 Run with:
-    python -m pytest tests/test_catch_classifier.py
+    python -m pytest tests/pytest/test_catch_classifier.py
 """
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 import pytest

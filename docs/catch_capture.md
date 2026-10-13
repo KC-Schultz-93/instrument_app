@@ -90,7 +90,7 @@ t_ms, a, b = load_pico_csv("some_capture.csv")
 print(classify_catch(a, b, (t_ms[1] - t_ms[0]) * 1e6))
 ```
 
-`tests/data/catch_example_FIGURE_1.csv.gz` is the first caught particle and is the regression fixture.
+`tests/pytest/data/catch_example_FIGURE_1.csv.gz` is the first caught particle and is the regression fixture.
 
 ## Known limits (read before trusting the counts)
 

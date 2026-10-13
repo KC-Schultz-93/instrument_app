@@ -5,7 +5,7 @@ Unit tests for PressureLogger: daily rotation, per-channel throttling, None
 handling, and history read-back. No hardware required.
 
 Run with:
-    python tests/test_pressure_logger.py
+    python tests/pytest/test_pressure_logger.py
 """
 
 import sys
@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from instrument_app.services.pressure_logger import PressureLogger
 

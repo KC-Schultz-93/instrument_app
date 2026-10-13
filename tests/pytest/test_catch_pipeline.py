@@ -5,7 +5,7 @@ Threaded catch pipeline against a fake scope (no hardware): counts, saved
 files, queue-full handling, prompt stop, and failure paths. Headless Qt.
 
 Run with:
-    python -m pytest tests/test_catch_pipeline.py
+    python -m pytest tests/pytest/test_catch_pipeline.py
 """
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -16,7 +16,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 import pytest

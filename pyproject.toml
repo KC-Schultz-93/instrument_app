@@ -16,3 +16,7 @@ dependencies = [
 
 [project.scripts]
 instrument-app = "instrument_app.app.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/pytest"]
+cache_dir = "tests/pytest/.pytest_cache"

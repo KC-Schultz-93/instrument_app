@@ -35,10 +35,10 @@ Scope also shows derived *Samples* and *Sample rate* (`_derived_scope_values()`,
   so failures and "PicoScope busy" snap them back.
 - `_load_settings()` sets `_loading_settings` so widget signals fired during load do not overwrite unread keys.
 - The dock sizes itself to its widest page, so every panel must wrap its labels (an unwrapped label once clipped every
-  panel's right edge); `tests/test_ratemeter_catch_ui.py` guards this.
+  panel's right edge); `tests/pytest/test_ratemeter_catch_ui.py` guards this.
 - New reusable widgets live in `ui/`: `ToggleSwitch`, `ParamTile`, `DockHost`, `CardFrame`.
 
 ## Tests
 
-`tests/test_ratemeter_page_ui.py` (config/settings characterization, tiles, dock, switches) and
-`tests/test_ui_tiles_smoke.py` (widgets across all themes). Run with `python -m pytest tests/`.
+`tests/pytest/test_ratemeter_page_ui.py` (config/settings characterization, tiles, dock, switches) and
+`tests/pytest/test_ui_tiles_smoke.py` (widgets across all themes). Run with `python -m pytest` (collects `tests/pytest/`).

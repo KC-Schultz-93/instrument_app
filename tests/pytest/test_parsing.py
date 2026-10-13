@@ -5,13 +5,13 @@ Unit tests for parse_arduino_line() against the INT_SYS.ino/SerialInterface.cpp
 wire format. No hardware required.
 
 Run with:
-    python tests/test_parsing.py
+    python tests/pytest/test_parsing.py
 """
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from instrument_app.services.parsing import parse_arduino_line, Reading
 

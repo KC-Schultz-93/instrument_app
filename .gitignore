@@ -75,3 +75,6 @@ read_me.toml
 #Dev helpers
 run_smoke.ps1
 smoke.py
+
+# pytest temp dirs left behind next to the cache dir
+pytest-cache-files-*/

@@ -19,7 +19,7 @@ Synthetic trace notes:
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 from datetime import datetime

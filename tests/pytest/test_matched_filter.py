@@ -8,13 +8,13 @@ Uses synthetic waveforms with injected bipolar (sine-cycle) pulses.
 of the single sine cycle that makes up the pulse.
 
 Run with:
-    python tests/test_matched_filter.py
+    python tests/pytest/test_matched_filter.py
 """
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 
@@ -22,7 +22,7 @@ from instrument_app.services.daq_models import MatchedFilterConfig
 from instrument_app.services.matched_filter import MatchedFilter, _peak_to_peak_samples
 from instrument_app.services.signal_extractor import SignalExtractor
 
-_TEMPLATE_PATH = Path(__file__).parent.parent / "templates" / "template.npy"
+_TEMPLATE_PATH = Path(__file__).parent.parent.parent / "templates" / "template.npy"
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ persistence, mode switching, and an end-to-end run against a fake scope.
 Headless (offscreen Qt), no hardware.
 
 Run with:
-    python -m pytest tests/test_ratemeter_catch_ui.py
+    python -m pytest tests/pytest/test_ratemeter_catch_ui.py
 """
 import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -17,7 +17,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 import pytest

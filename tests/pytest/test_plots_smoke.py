@@ -7,7 +7,7 @@ persistence, and smoothing. Runs headless (offscreen Qt platform). No
 hardware required.
 
 Run with:
-    python tests/test_plots_smoke.py
+    python tests/pytest/test_plots_smoke.py
 """
 
 import os
@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from PyQt5.QtWidgets import QApplication
 from instrument_app.ui.plots import TimePressureView, LogPressureAxisItem

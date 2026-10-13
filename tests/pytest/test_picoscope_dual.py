@@ -9,12 +9,12 @@ This checks our calling logic, not the real driver; the first run on the real
 PicoScope 4262 is still the true test.
 
 Run with:
-    python -m pytest tests/test_picoscope_dual.py
+    python -m pytest tests/pytest/test_picoscope_dual.py
 """
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 
 import numpy as np

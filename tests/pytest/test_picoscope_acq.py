@@ -1,8 +1,8 @@
 """
-tests/test_picoscope_acq.py
+tests/pytest/test_picoscope_acq.py
 ---------------------------
 Minimal standalone acquisition test for PicoScope 4262.
-Run directly with:  python tests/test_picoscope_acq.py
+Run directly with:  python tests/pytest/test_picoscope_acq.py
 
 Prints step-by-step progress so you can see exactly where the
 hardware pipeline stalls or produces wrong data, independently of the GUI.

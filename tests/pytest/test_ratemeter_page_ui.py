@@ -7,7 +7,7 @@ acquisition behaviour. Headless (offscreen Qt), no hardware: PicoScopeService
 is replaced by a fake.
 
 Run with:
-    python -m pytest tests/test_ratemeter_page_ui.py
+    python -m pytest tests/pytest/test_ratemeter_page_ui.py
 """
 
 import os
@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import pytest
 from PyQt5.QtCore import QSettings

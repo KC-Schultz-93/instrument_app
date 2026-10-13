@@ -5,7 +5,7 @@ Smoke tests for ToggleSwitch, ParamTile and DockHost: construction, every
 theme applies, and click/open/close signals. Headless, no hardware.
 
 Run with:
-    python -m pytest tests/test_ui_tiles_smoke.py
+    python -m pytest tests/pytest/test_ui_tiles_smoke.py
 """
 
 import os
@@ -14,7 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from PyQt5.QtCore import QPoint, Qt
 from PyQt5.QtTest import QTest

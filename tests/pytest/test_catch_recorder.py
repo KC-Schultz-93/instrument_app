@@ -5,7 +5,7 @@ Tests for services/catch_recorder.py: raw CSV layout, round trip, sidecar JSON,
 index CSV, session summary. No Qt, no hardware.
 
 Run with:
-    python -m pytest tests/test_catch_recorder.py
+    python -m pytest tests/pytest/test_catch_recorder.py
 """
 import csv
 import json
@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 import numpy as np
 import pytest
