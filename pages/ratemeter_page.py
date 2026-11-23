@@ -448,6 +448,33 @@ class RatemeterPage(QWidget):
         self.chk_bandwidth_limit.stateChanged.connect(self._schedule_restart)
         lay.addWidget(self.chk_bandwidth_limit)
 
+        # Channel B: configured here alongside A. Signals are connected in
+        # _make_catch_panel; B is only acquired in catch capture mode.
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        lay.addWidget(sep)
+        lay.addWidget(QLabel("Channel B (catch capture)"))
+
+        lay.addWidget(QLabel("B probe:"))
+        self.combo_catch_b_probe = QComboBox()
+        self.combo_catch_b_probe.addItems(list(PROBE_FACTORS.keys()))
+        self.combo_catch_b_probe.setCurrentText("x1")
+        lay.addWidget(self.combo_catch_b_probe)
+
+        lay.addWidget(QLabel("B voltage range:"))
+        self.combo_catch_b_range = QComboBox()
+        self._populate_catch_b_range_combo()
+        self.combo_catch_b_range.setCurrentText("±20 mV")
+        lay.addWidget(self.combo_catch_b_range)
+
+        lay.addWidget(QLabel("B coupling:"))
+        self.combo_catch_b_coupling = QComboBox()
+        self.combo_catch_b_coupling.addItems(["DC", "AC"])
+        lay.addWidget(self.combo_catch_b_coupling)
+
+        self.chk_catch_b_bw = QCheckBox("B: 200 kHz bandwidth limit")
+        lay.addWidget(self.chk_catch_b_bw)
+
         return box
 
     def _make_scope_panel(self) -> QWidget:
@@ -731,32 +758,12 @@ class RatemeterPage(QWidget):
             "Records channels A and B on every trigger and keeps only waveforms "
             "with a caught particle: repeating bipolar lobes on A and a repeating "
             "square wave on B. Everything else is discarded and counted.\n"
-            "A is the trigger / lobe channel (set up in the Channel panel). "
+            "A is the trigger / lobe channel; A and B are both set up in the Channel panel. "
             "Captures per batch is not used in this mode."
         )
         note.setWordWrap(True)
         note.setStyleSheet("font-size: 8pt;")
         lay.addWidget(note)
-
-        lay.addWidget(self._wrapped_label("Channel B probe:"))
-        self.combo_catch_b_probe = QComboBox()
-        self.combo_catch_b_probe.addItems(list(PROBE_FACTORS.keys()))
-        self.combo_catch_b_probe.setCurrentText("x1")
-        lay.addWidget(self.combo_catch_b_probe)
-
-        lay.addWidget(self._wrapped_label("Channel B voltage range:"))
-        self.combo_catch_b_range = QComboBox()
-        self._populate_catch_b_range_combo()
-        self.combo_catch_b_range.setCurrentText("±20 mV")
-        lay.addWidget(self.combo_catch_b_range)
-
-        lay.addWidget(self._wrapped_label("Channel B coupling:"))
-        self.combo_catch_b_coupling = QComboBox()
-        self.combo_catch_b_coupling.addItems(["DC", "AC"])
-        lay.addWidget(self.combo_catch_b_coupling)
-
-        self.chk_catch_b_bw = QCheckBox("B: 200 kHz bandwidth limit")
-        lay.addWidget(self.chk_catch_b_bw)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
@@ -1269,7 +1276,11 @@ class RatemeterPage(QWidget):
 
         pi = self.plot_widget.getPlotItem()
         pi.showGrid(x=True, y=True, alpha=0.3)
-        pi.setLabel("bottom", "Time", units="µs")
+        # Data x is in µs; show ms. pyqtgraph's auto SI prefix would otherwise
+        # turn large µs values into "kµs".
+        pi.setLabel("bottom", "Time", units="ms")
+        pi.getAxis("bottom").setScale(1e-3)
+        pi.getAxis("bottom").enableAutoSIPrefix(False)
         pi.setLabel("left", "Voltage", units="mV")
         pi.setTitle("Waveform")
 

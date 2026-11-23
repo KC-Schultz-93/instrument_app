@@ -25,8 +25,8 @@ PROBE_FACTORS = {
     "x10": 10.0,
 }
 
-# Native PicoScope 4262 hardware ranges this app exposes (volts).
-NATIVE_VOLTAGE_RANGES_V = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+# Native PicoScope 4262 hardware ranges this app exposes (volts); ±20 V is the largest.
+NATIVE_VOLTAGE_RANGES_V = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
 
 
 def format_voltage_label(true_v: float) -> str:

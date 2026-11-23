@@ -1,0 +1,36 @@
+{
+  "session_id": "2026_10_13_110416",
+  "started": "2026-10-13T11:04:16",
+  "ended": "2026-10-13T11:12:34",
+  "saved_waveforms": 0,
+  "counters": {
+    "triggers": 1374,
+    "catches": 0,
+    "non_catches": 1374,
+    "dropped": 0,
+    "no_trigger_timeouts": 20,
+    "errors": 0,
+    "elapsed_s": 335.6006564004347
+  },
+  "classifier_config": {
+    "analysis_start_ms": 2.2,
+    "analysis_end_ms": null,
+    "min_cycles": 5.5,
+    "min_period_us": 20.0,
+    "a_coherence_min": 0.5,
+    "b_coherence_min": 1.3877787807814457e-17,
+    "period_tolerance": 0.15,
+    "fold_snr_min": 1.4,
+    "lobe_significance": 5.0,
+    "lobe_balance_min": 0.3,
+    "b_shape_ratio_min": 0.0,
+    "max_nonfinite_fraction": 0.05
+  },
+  "trigger": {
+    "enabled": true,
+    "threshold_mv": 0.2,
+    "direction": "RISING",
+    "auto_timeout_ms": 500
+  },
+  "mirror_voltages_history": []
+}

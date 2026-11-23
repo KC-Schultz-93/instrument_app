@@ -68,6 +68,12 @@ _TIME_WINDOWS_HOURS = {
     "24 hours": 24,
 }
 
+# After (re)connecting, the Arduino resets and (on older firmware) its first
+# averaged line reads a bogus UHV full-scale value. Pressure readings are
+# dropped (not shown, plotted or logged) for this many seconds after connect.
+# Newer firmware primes its gauges in setup(), so this is just a safety net.
+_WARMUP_S = 10.0
+
 
 class PressureInterlockPage(QWidget):
     """Composes pressure cards, pump cards and the time-pressure plot."""
@@ -78,6 +84,7 @@ class PressureInterlockPage(QWidget):
         self.recorder = recorder
         self._maint_active = False
         self._start_time: float | None = None
+        self._connected_at: float | None = None
         self._maint_dialog: MaintenanceDialog | None = None
 
         grid = QGridLayout(self)
@@ -220,6 +227,7 @@ class PressureInterlockPage(QWidget):
             pass
 
     def _on_connected(self, ok: bool, tip: str) -> None:
+        self._connected_at = time.time() if ok else None
         self.toolbar.set_connected(ok, tip)
 
     def _on_status(self, msg: str) -> None:
@@ -230,13 +238,21 @@ class PressureInterlockPage(QWidget):
         self.status_lbl.set_roles(lambda t: t.BAD if is_problem else t.CARD_BG)
 
     def _on_reading(self, r: Reading) -> None:
-        self.card_uhv.value.setText(f"{r.uhv_torr:.2E}  TORR" if getattr(r, "uhv_torr", None) is not None else "Sensor Off")
-        self.card_fore.value.setText(f"{r.fore_torr:.2E}  TORR" if getattr(r, "fore_torr", None) is not None else "Sensor Off")
+        warming = (self._connected_at is not None
+                   and time.time() - self._connected_at < _WARMUP_S)
+        if warming:
+            self.card_uhv.value.setText("Warming up…")
+            self.card_fore.value.setText("Warming up…")
+        else:
+            self.card_uhv.value.setText(f"{r.uhv_torr:.2E}  TORR" if getattr(r, "uhv_torr", None) is not None else "Sensor Off")
+            self.card_fore.value.setText(f"{r.fore_torr:.2E}  TORR" if getattr(r, "fore_torr", None) is not None else "Sensor Off")
         self._set_dot(self.card_tg220.dot, getattr(r, "tg220", ""))
         self._set_dot(self.card_tg60.dot, getattr(r, "tg60", ""))
         self._set_maint_state(bool(getattr(r, "maint", False)))
         if self._maint_dialog is not None:
             self._maint_dialog.update_from_reading(r)
+        if warming:
+            return  # skip plot + log until the firmware's averaging has settled
         self.plot.append(r)
         if self._start_time is None:
             self._start_time = time.time()

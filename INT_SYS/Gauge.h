@@ -26,6 +26,9 @@ struct Gauge {
 
   void reset() { median.reset(); ema.reset(); }
   void update();
+  // Settle after a reset: discard `settleMs` of readings, then clear the
+  // filters and fill them with `fillSamples` fresh readings.
+  void prime(uint16_t settleMs = 2000, uint8_t fillSamples = 8);
 
   float volts() const { return lastVolts; }
   float torr()  const { return lastTorr; }

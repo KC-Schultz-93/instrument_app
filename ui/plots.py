@@ -258,13 +258,27 @@ class TimePressureView(QWidget):
         self._update()
 
     # ---- internals ----
-    def _get_window_data(self, channel: str) -> tuple[np.ndarray, np.ndarray]:
+    def _read_history_cached(self, channel: str, cutoff: float, mem_oldest: float):
+        """Disk history older than the in-memory buffer. That span is static,
+        so cache it (keyed on a coarse cutoff) instead of re-reading CSVs on
+        every incoming reading."""
+        key = (channel, round(cutoff / 60.0), round(mem_oldest))
+        cache = getattr(self, "_hist_cache", None)
+        if cache is None:
+            cache = self._hist_cache = {}
+        if key not in cache:
+            cache.clear()  # keep only the latest range per view
+            cache[key] = self._history_source.read_range(channel, cutoff, mem_oldest - 1)
+        return cache[key]
+
+    def _get_window_data(self, channel: str, cutoff: float | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Times/values for `channel` ('uhv'/'foreline') covering the current
-        time window, backfilling from history_source if the in-memory buffer
-        doesn't go back far enough."""
+        time window (or from `cutoff` if given), backfilling from
+        history_source if the in-memory buffer doesn't go back far enough."""
         window_seconds = self._window_hours * 3600.0
         now = time.time()
-        cutoff = now - window_seconds
+        if cutoff is None:
+            cutoff = now - window_seconds
 
         mem_vals = self._uhv if channel == "uhv" else self._fl
         times = list(self._ts)
@@ -272,7 +286,7 @@ class TimePressureView(QWidget):
         mem_oldest = times[0] if times else now
 
         if self._history_source is not None and cutoff < mem_oldest:
-            hist_times, hist_values = self._history_source.read_range(channel, cutoff, mem_oldest - 1)
+            hist_times, hist_values = self._read_history_cached(channel, cutoff, mem_oldest)
             if hist_times:
                 times = list(hist_times) + times
                 values = list(hist_values) + values
@@ -291,8 +305,11 @@ class TimePressureView(QWidget):
 
         channel = "foreline" if self._view == "Foreline" else "uhv"
         if self._manual:
-            times = np.array(self._ts, dtype=float)
-            values = np.array(self._fl if channel == "foreline" else self._uhv, dtype=float)
+            # User zoomed/panned: still include on-disk history back to the
+            # left edge of the view (or the selected window, if older).
+            view_left = self.vb.viewRange()[0][0]
+            cutoff = min(view_left, time.time() - self._window_hours * 3600.0)
+            times, values = self._get_window_data(channel, cutoff)
         else:
             times, values = self._get_window_data(channel)
 

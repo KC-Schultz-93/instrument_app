@@ -93,6 +93,12 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
+  // Let the ADC settle and fill the filters before anything is logged, so the
+  // first CSV line after a reset/reconnect isn't a bogus full-scale reading.
+  gaugeUHV.prime();
+  gaugeForeline.prime();
+  tLastLog = millis();
+
   stateMachine.begin(millis());
 
   StateManager::SavedState saved;
