@@ -65,6 +65,8 @@ Recorded Data/
 | `services/catch_classifier.py` | Catch decision: does an A+B trace show a caught particle (pure numpy/scipy) |
 | `services/catch_recorder.py` | Saving kept catch waveforms (raw CSV + JSON + index) and reading PicoScope CSVs |
 | `services/catch_worker.py` | Catch pipeline: acquisition thread, queue, analysis thread, counters |
+| `services/hold_detector.py` | Mirror hold: is the particle still passing the pickup (chunked A stream → hit/miss tracking → release decision; pure numpy/scipy) |
+| `services/mirror_hold.py` | *(planned, after bench Step 0)* Mirror-hold controller: state machine, stream reader thread, AWG release |
 | `services/serial_manager.py` | Serial comms to Arduino — **do not touch** |
 | `services/pressure_logger.py` | Pressure logging (daily-rotating UHV/Foreline CSVs) — **do not touch** |
 
@@ -74,8 +76,9 @@ Recorded Data/
 
 In scope: waveform acquisition → event detection → signal extraction → CDMS physics → data products.
 **Out of scope: electrode control.** Do not add it.
+*Approved exception — mirror hold (`docs/Pulser_Triggering.md`):* the PicoScope AWG may drive the front-mirror pulser input (+1 V on / 0 V off), released by software when the particle is lost. This is the only electrode-related output allowed; it must never change the pulser, HV supply or their setpoints, and the AWG must be at 0 V at startup and after every run.
 
-Driver: `ps4000`. Block mode only for now (not streaming).
+Driver: `ps4000`. Block mode for the DAQ and catch pipelines. *Exception:* the mirror hold uses streaming mode (`ps4000RunStreaming`) so it can release in about a millisecond.
 
 CDMS physics calibration (see `services/cdms_analyzer.py` / `services/daq_models.CDMSConfig`):
 - Charge: `Q [e] = V_peak [µV] / charge_cal_uv_per_e` (CoolFET amplifier, default 0.64 µV/e)

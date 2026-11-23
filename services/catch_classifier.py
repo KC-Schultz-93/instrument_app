@@ -132,7 +132,7 @@ def _reject(reason: str, **features) -> CatchResult:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fill_nonfinite(x: np.ndarray) -> np.ndarray:
+def fill_nonfinite(x: np.ndarray) -> np.ndarray:
     """Linearly interpolate across NaN/inf samples (overrange markers)."""
     bad = ~np.isfinite(x)
     if not bad.any():
@@ -145,7 +145,7 @@ def _fill_nonfinite(x: np.ndarray) -> np.ndarray:
     return out
 
 
-def _highpass(x: np.ndarray, length: int) -> np.ndarray:
+def highpass(x: np.ndarray, length: int) -> np.ndarray:
     """Remove slow structure by subtracting a moving average of `length` samples."""
     length = max(3, int(length))
     return x - uniform_filter1d(x, size=length, mode="reflect")
@@ -164,7 +164,7 @@ def _fold(x: np.ndarray, lag: int):
     return template, resid, n_cyc
 
 
-def _autocorr_unbiased(x: np.ndarray, max_lag: int) -> np.ndarray:
+def autocorr_unbiased(x: np.ndarray, max_lag: int) -> np.ndarray:
     """Normalized, overlap-corrected autocorrelation r[0..max_lag] via FFT.
     r[0] == 1. Overlap correction stops long lags being penalized."""
     n = x.size
@@ -176,7 +176,7 @@ def _autocorr_unbiased(x: np.ndarray, max_lag: int) -> np.ndarray:
     return ac / ac[0] if ac[0] > 0 else np.zeros(max_lag + 1)
 
 
-def _first_strong_peak(r: np.ndarray, min_lag: int, max_lag: int,
+def first_strong_peak(r: np.ndarray, min_lag: int, max_lag: int,
                        strength: float = 0.85) -> Optional[int]:
     """Smallest-lag local maximum of r within [min_lag, max_lag] whose height is
     at least `strength` x the best peak. Prefers the fundamental period over its
@@ -255,18 +255,18 @@ def classify_catch(
             f"overrange in analysis window ({nonfinite:.0%} of samples)",
             nonfinite_fraction=nonfinite,
         )
-    wa, wb = _fill_nonfinite(wa), _fill_nonfinite(wb)
+    wa, wb = fill_nonfinite(wa), fill_nonfinite(wb)
 
     # ---- high-pass: remove slow baseline recovery ----
     # First pass uses a long average (period still unknown); the second pass,
     # once the period is known, averages over an exact number of periods so the
     # repeating signal is not touched while the slow recovery curve is removed.
-    ha = _highpass(wa, max_lag)
+    ha = highpass(wa, max_lag)
     feats = dict(nonfinite_fraction=nonfinite)
 
     # ---- gate 1: A repeats ----
-    ra = _autocorr_unbiased(ha, max_lag)
-    lag = _first_strong_peak(ra, min_lag, max_lag)
+    ra = autocorr_unbiased(ha, max_lag)
+    lag = first_strong_peak(ra, min_lag, max_lag)
     if lag is None:
         return _reject("no repeating pattern on A", **feats)
     a_coh = float(ra[lag])
@@ -279,11 +279,11 @@ def classify_catch(
         return _reject(
             f"A repetition too weak ({a_coh:.2f} < {cfg.a_coherence_min:.2f})", **feats)
 
-    ha = _highpass(wa, 2 * lag)
-    hb = _highpass(wb, 2 * lag)
+    ha = highpass(wa, 2 * lag)
+    hb = highpass(wb, 2 * lag)
 
     # ---- gate 2: B repeats at the same period ----
-    rb = _autocorr_unbiased(hb, max_lag)
+    rb = autocorr_unbiased(hb, max_lag)
     lo = max(min_lag, int(lag * (1 - cfg.period_tolerance)))
     hi = min(max_lag, int(np.ceil(lag * (1 + cfg.period_tolerance))))
     b_coh = float(rb[lo: hi + 1].max()) if hi >= lo else 0.0
